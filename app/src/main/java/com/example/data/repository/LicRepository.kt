@@ -1,10 +1,17 @@
 package com.example.data.repository
 
+import android.util.Log
 import com.example.data.local.*
 import com.example.data.remote.FirebaseSyncManager
 import com.google.firebase.auth.FirebaseAuth
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.combine
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
 
 data class DashboardStats(
@@ -28,50 +35,220 @@ class LicRepository(
     private val documentDao = db.documentDao()
     private val agentDao = db.agentDao()
 
-    private fun getCurrentUid(): String? {
+    private val scope = CoroutineScope(Dispatchers.IO)
+
+    private fun getCurrentUid(): String {
         return try {
-            FirebaseAuth.getInstance().currentUser?.uid
+            val uid = FirebaseAuth.getInstance().currentUser?.uid
+            if (!uid.isNullOrBlank()) {
+                uid
+            } else {
+                val profile = kotlinx.coroutines.runBlocking { agentDao.getAgentProfileSync() }
+                if (profile != null && profile.email.isNotBlank()) {
+                    "agent_" + profile.email.trim().hashCode()
+                } else {
+                    "default_agent"
+                }
+            }
+        } catch (e: Throwable) {
+            "default_agent"
+        }
+    }
+
+    private fun getFirestore(): FirebaseFirestore? {
+        return try {
+            FirebaseFirestore.getInstance()
         } catch (e: Throwable) {
             null
         }
     }
 
-    // Customer operations
-    val allCustomers: Flow<List<CustomerEntity>> = customerDao.getAllCustomers()
+    // --- Customers Firestore Flow & Operations ---
+    val allCustomers: Flow<List<CustomerEntity>> = callbackFlow {
+        val firestore = getFirestore()
+        if (firestore == null) {
+            val job = scope.launch {
+                customerDao.getAllCustomers().collect { trySend(it) }
+            }
+            awaitClose { job.cancel() }
+            return@callbackFlow
+        }
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+        val job = scope.launch {
+            val uid = syncManager.getOrEnsureUid()
+            Log.d("FirestoreSync", "Listening for Customers in Firestore at path: agents/$uid/customers")
+            listenerRegistration = firestore.collection("agents").document(uid)
+                .collection("customers")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e("FirestoreSync", "Firestore customer listener failed for UID: $uid. Error: ${error.localizedMessage}", error)
+                        scope.launch {
+                            val local = customerDao.getAllCustomersSync()
+                            trySend(local)
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        Log.d("FirestoreSync", "Received Customer snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
+                        val list = snapshot.documents.mapNotNull { doc ->
+                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                            CustomerEntity(
+                                id = id,
+                                name = doc.getString("name") ?: "",
+                                mobile = doc.getString("mobile") ?: "",
+                                whatsapp = doc.getString("whatsapp") ?: "",
+                                email = doc.getString("email") ?: "",
+                                address = doc.getString("address") ?: "",
+                                dob = doc.getString("dob") ?: "",
+                                anniversary = doc.getString("anniversary") ?: "",
+                                aadhaar = doc.getString("aadhaar") ?: "",
+                                pan = doc.getString("pan") ?: "",
+                                occupation = doc.getString("occupation") ?: "",
+                                notes = doc.getString("notes") ?: "",
+                                photoUri = doc.getString("photoUri")?.ifBlank { null },
+                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                            )
+                        }
+                        scope.launch {
+                            list.forEach { customerDao.insertCustomer(it) }
+                            val fullLocalList = customerDao.getAllCustomersSync()
+                            trySend(fullLocalList)
+                        }
+                    }
+                }
+        }
+        awaitClose {
+            job.cancel()
+            listenerRegistration?.remove()
+        }
+    }
 
     fun searchCustomers(query: String): Flow<List<CustomerEntity>> {
         return if (query.isBlank()) allCustomers else customerDao.searchCustomers(query)
     }
 
-    suspend fun getCustomerById(id: Long): CustomerEntity? = customerDao.getCustomerById(id)
+    suspend fun getCustomerById(id: Long): CustomerEntity? {
+        val firestore = getFirestore()
+        if (firestore != null) {
+            try {
+                val uid = syncManager.getOrEnsureUid()
+                val doc = firestore.collection("agents").document(uid)
+                    .collection("customers").document(id.toString()).get().await()
+                if (doc.exists()) {
+                    return CustomerEntity(
+                        id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: id,
+                        name = doc.getString("name") ?: "",
+                        mobile = doc.getString("mobile") ?: "",
+                        whatsapp = doc.getString("whatsapp") ?: "",
+                        email = doc.getString("email") ?: "",
+                        address = doc.getString("address") ?: "",
+                        dob = doc.getString("dob") ?: "",
+                        anniversary = doc.getString("anniversary") ?: "",
+                        aadhaar = doc.getString("aadhaar") ?: "",
+                        pan = doc.getString("pan") ?: "",
+                        occupation = doc.getString("occupation") ?: "",
+                        notes = doc.getString("notes") ?: "",
+                        photoUri = doc.getString("photoUri")?.ifBlank { null },
+                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w("FirestoreSync", "Error getting customer by ID from Firestore: ${e.localizedMessage}")
+            }
+        }
+        return customerDao.getCustomerById(id)
+    }
 
     suspend fun insertCustomer(customer: CustomerEntity): Long {
-        val id = customerDao.insertCustomer(customer)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupCustomer(uid, customer.copy(id = id))
-        }
-        return id
+        val newId = if (customer.id == 0L) System.currentTimeMillis() else customer.id
+        val entity = customer.copy(id = newId)
+
+        customerDao.insertCustomer(entity)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupCustomer(uid, entity)
+        syncManager.backupReminders(uid, db)
+        return newId
     }
 
     suspend fun updateCustomer(customer: CustomerEntity) {
         customerDao.updateCustomer(customer)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupCustomer(uid, customer)
-        }
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupCustomer(uid, customer)
+        syncManager.backupReminders(uid, db)
     }
 
     suspend fun deleteCustomer(customer: CustomerEntity) {
         customerDao.deleteCustomer(customer)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.deleteCustomerInCloud(uid, customer.id)
-        }
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.deleteCustomerInCloud(uid, customer.id)
+        syncManager.backupReminders(uid, db)
     }
 
-    // Policy operations
-    val allPolicies: Flow<List<PolicyEntity>> = policyDao.getAllPolicies()
+    // --- Policies Firestore Flow & Operations ---
+    val allPolicies: Flow<List<PolicyEntity>> = callbackFlow {
+        val firestore = getFirestore()
+        if (firestore == null) {
+            val job = scope.launch {
+                policyDao.getAllPolicies().collect { trySend(it) }
+            }
+            awaitClose { job.cancel() }
+            return@callbackFlow
+        }
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+        val job = scope.launch {
+            val uid = syncManager.getOrEnsureUid()
+            Log.d("FirestoreSync", "Listening for Policies in Firestore at path: agents/$uid/policies")
+            listenerRegistration = firestore.collection("agents").document(uid)
+                .collection("policies")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e("FirestoreSync", "Firestore policy listener error for UID: $uid: ${error.localizedMessage}", error)
+                        scope.launch {
+                            val local = policyDao.getAllPoliciesSync()
+                            trySend(local)
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        Log.d("FirestoreSync", "Received Policy snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
+                        val list = snapshot.documents.mapNotNull { doc ->
+                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                            PolicyEntity(
+                                id = id,
+                                policyNumber = doc.getString("policyNumber") ?: "",
+                                customerId = doc.getLong("customerId") ?: 0L,
+                                customerName = doc.getString("customerName") ?: "",
+                                planName = doc.getString("planName") ?: "",
+                                premiumAmount = doc.getDouble("premiumAmount") ?: 0.0,
+                                sumAssured = doc.getDouble("sumAssured") ?: 0.0,
+                                premiumMode = doc.getString("premiumMode") ?: "Yearly",
+                                dueDate = doc.getString("dueDate") ?: "",
+                                maturityDate = doc.getString("maturityDate") ?: "",
+                                status = doc.getString("status") ?: "Active",
+                                nominee = doc.getString("nominee") ?: "",
+                                policyTerm = (doc.getLong("policyTerm") ?: 20L).toInt(),
+                                premiumPayingTerm = (doc.getLong("premiumPayingTerm") ?: 16L).toInt(),
+                                issueDate = doc.getString("issueDate") ?: "",
+                                gracePeriodDays = (doc.getLong("gracePeriodDays") ?: 30L).toInt(),
+                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                            )
+                        }
+                        scope.launch {
+                            list.forEach { policyDao.insertPolicy(it) }
+                            val fullLocalList = policyDao.getAllPoliciesSync()
+                            trySend(fullLocalList)
+                        }
+                    }
+                }
+        }
+        awaitClose {
+            job.cancel()
+            listenerRegistration?.remove()
+        }
+    }
 
     fun searchPolicies(query: String): Flow<List<PolicyEntity>> {
         return if (query.isBlank()) allPolicies else policyDao.searchPolicies(query)
@@ -81,40 +258,102 @@ class LicRepository(
     suspend fun getPolicyById(id: Long): PolicyEntity? = policyDao.getPolicyById(id)
 
     suspend fun insertPolicy(policy: PolicyEntity): Long {
-        val id = policyDao.insertPolicy(policy)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupPolicy(uid, policy.copy(id = id))
-        }
-        return id
+        val newId = if (policy.id == 0L) System.currentTimeMillis() else policy.id
+        val entity = policy.copy(id = newId)
+
+        policyDao.insertPolicy(entity)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupPolicy(uid, entity)
+        syncManager.backupReminders(uid, db)
+        return newId
     }
 
     suspend fun updatePolicy(policy: PolicyEntity) {
         policyDao.updatePolicy(policy)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupPolicy(uid, policy)
-        }
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupPolicy(uid, policy)
+        syncManager.backupReminders(uid, db)
     }
 
     suspend fun deletePolicy(policy: PolicyEntity) {
         policyDao.deletePolicy(policy)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.deletePolicyInCloud(uid, policy.id)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.deletePolicyInCloud(uid, policy.id)
+        syncManager.backupReminders(uid, db)
+    }
+
+    // --- Payments Firestore Flow & Operations ---
+    val allPayments: Flow<List<PaymentEntity>> = callbackFlow {
+        val firestore = getFirestore()
+        if (firestore == null) {
+            val job = scope.launch {
+                paymentDao.getAllPayments().collect { trySend(it) }
+            }
+            awaitClose { job.cancel() }
+            return@callbackFlow
+        }
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+        val job = scope.launch {
+            val uid = syncManager.getOrEnsureUid()
+            Log.d("FirestoreSync", "Listening for Payments in Firestore at path: agents/$uid/payments")
+            listenerRegistration = firestore.collection("agents").document(uid)
+                .collection("payments")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e("FirestoreSync", "Firestore payment listener error for UID: $uid: ${error.localizedMessage}", error)
+                        scope.launch {
+                            val local = paymentDao.getAllPaymentsSync()
+                            trySend(local)
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        Log.d("FirestoreSync", "Received Payment snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
+                        val list = snapshot.documents.mapNotNull { doc ->
+                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                            PaymentEntity(
+                                id = id,
+                                policyId = doc.getLong("policyId") ?: 0L,
+                                policyNumber = doc.getString("policyNumber") ?: "",
+                                customerId = doc.getLong("customerId") ?: 0L,
+                                customerName = doc.getString("customerName") ?: "",
+                                paidAmount = doc.getDouble("paidAmount") ?: 0.0,
+                                lateFee = doc.getDouble("lateFee") ?: 0.0,
+                                paymentDate = doc.getString("paymentDate") ?: "",
+                                paymentMode = doc.getString("paymentMode") ?: "UPI",
+                                receiptNumber = doc.getString("receiptNumber") ?: "",
+                                notes = doc.getString("notes") ?: "",
+                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                            )
+                        }
+                        scope.launch {
+                            list.forEach { paymentDao.insertPayment(it) }
+                            val fullLocalList = paymentDao.getAllPaymentsSync()
+                            trySend(fullLocalList)
+                        }
+                    }
+                }
+        }
+        awaitClose {
+            job.cancel()
+            listenerRegistration?.remove()
         }
     }
 
-    // Payment operations
-    val allPayments: Flow<List<PaymentEntity>> = paymentDao.getAllPayments()
     fun getPaymentsByPolicyId(policyId: Long): Flow<List<PaymentEntity>> = paymentDao.getPaymentsByPolicyId(policyId)
 
     suspend fun collectPremium(payment: PaymentEntity, nextDueDate: String) {
-        val id = paymentDao.insertPayment(payment)
-        val insertedPayment = payment.copy(id = id)
+        val newPaymentId = if (payment.id == 0L) System.currentTimeMillis() else payment.id
+        val insertedPayment = payment.copy(id = newPaymentId)
+
+        paymentDao.insertPayment(insertedPayment)
 
         val policy = policyDao.getPolicyById(payment.policyId)
-        val uid = getCurrentUid()
+        val uid = syncManager.getOrEnsureUid()
 
         if (policy != null) {
             val updatedPolicy = policy.copy(
@@ -122,86 +361,184 @@ class LicRepository(
                 status = "Active"
             )
             policyDao.updatePolicy(updatedPolicy)
-            if (!uid.isNullOrBlank()) {
-                syncManager.backupPolicy(uid, updatedPolicy)
-            }
+            syncManager.backupPolicy(uid, updatedPolicy)
         }
 
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupPayment(uid, insertedPayment)
-        }
+        syncManager.backupPayment(uid, insertedPayment)
+        syncManager.backupReminders(uid, db)
     }
 
     suspend fun updatePayment(payment: PaymentEntity) {
         paymentDao.updatePayment(payment)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupPayment(uid, payment)
-        }
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupPayment(uid, payment)
+        syncManager.backupReminders(uid, db)
     }
 
     suspend fun deletePayment(payment: PaymentEntity) {
         paymentDao.deletePayment(payment)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.deletePaymentInCloud(uid, payment.id)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.deletePaymentInCloud(uid, payment.id)
+        syncManager.backupReminders(uid, db)
+    }
+
+    // --- Documents Firestore Flow & Operations ---
+    val allDocuments: Flow<List<DocumentEntity>> = callbackFlow {
+        val firestore = getFirestore()
+        if (firestore == null) {
+            val job = scope.launch {
+                documentDao.getAllDocuments().collect { trySend(it) }
+            }
+            awaitClose { job.cancel() }
+            return@callbackFlow
+        }
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+        val job = scope.launch {
+            val uid = syncManager.getOrEnsureUid()
+            Log.d("FirestoreSync", "Listening for Documents in Firestore at path: agents/$uid/documents")
+            listenerRegistration = firestore.collection("agents").document(uid)
+                .collection("documents")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e("FirestoreSync", "Firestore document listener error for UID: $uid: ${error.localizedMessage}", error)
+                        scope.launch {
+                            val local = documentDao.getAllDocumentsSync()
+                            trySend(local)
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        Log.d("FirestoreSync", "Received Document snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
+                        val list = snapshot.documents.mapNotNull { doc ->
+                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                            DocumentEntity(
+                                id = id,
+                                customerId = doc.getLong("customerId"),
+                                customerName = doc.getString("customerName") ?: "",
+                                policyId = doc.getLong("policyId"),
+                                docType = doc.getString("docType") ?: "Document",
+                                title = doc.getString("title") ?: "",
+                                fileUri = doc.getString("fileUri") ?: "",
+                                fileSize = doc.getString("fileSize") ?: "1.0 MB",
+                                uploadDate = doc.getString("uploadDate") ?: "",
+                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                            )
+                        }
+                        scope.launch {
+                            list.forEach { documentDao.insertDocument(it) }
+                            val fullLocalList = documentDao.getAllDocumentsSync()
+                            trySend(fullLocalList)
+                        }
+                    }
+                }
+        }
+        awaitClose {
+            job.cancel()
+            listenerRegistration?.remove()
         }
     }
 
-    // Document operations
-    val allDocuments: Flow<List<DocumentEntity>> = documentDao.getAllDocuments()
     fun getDocumentsForCustomer(customerId: Long): Flow<List<DocumentEntity>> = documentDao.getDocumentsForCustomer(customerId)
     fun getDocumentsForPolicy(policyId: Long): Flow<List<DocumentEntity>> = documentDao.getDocumentsForPolicy(policyId)
 
     suspend fun insertDocument(document: DocumentEntity): Long {
-        val id = documentDao.insertDocument(document)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupDocument(uid, document.copy(id = id))
-        }
-        return id
+        val newId = if (document.id == 0L) System.currentTimeMillis() else document.id
+        val entity = document.copy(id = newId)
+
+        documentDao.insertDocument(entity)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupDocument(uid, entity)
+        return newId
     }
 
     suspend fun updateDocument(document: DocumentEntity) {
         documentDao.updateDocument(document)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupDocument(uid, document)
-        }
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupDocument(uid, document)
     }
 
     suspend fun deleteDocument(document: DocumentEntity) {
         documentDao.deleteDocument(document)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.deleteDocumentInCloud(uid, document.id)
+
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.deleteDocumentInCloud(uid, document.id)
+    }
+
+    // --- Agent Profile Firestore Flow & Operations ---
+    val agentProfile: Flow<AgentProfileEntity?> = callbackFlow {
+        val firestore = getFirestore()
+        if (firestore == null) {
+            val job = scope.launch {
+                agentDao.getAgentProfile().collect { trySend(it) }
+            }
+            awaitClose { job.cancel() }
+            return@callbackFlow
+        }
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+        val job = scope.launch {
+            val uid = syncManager.getOrEnsureUid()
+            Log.d("FirestoreSync", "Listening for Agent Profile in Firestore at path: agents/$uid")
+            listenerRegistration = firestore.collection("agents").document(uid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null || snapshot == null || !snapshot.exists()) {
+                        scope.launch {
+                            val local = agentDao.getAgentProfileSync()
+                            trySend(local)
+                        }
+                        return@addSnapshotListener
+                    }
+                    val profile = AgentProfileEntity(
+                        id = 1,
+                        agentName = snapshot.getString("agentName") ?: "Agent",
+                        agencyCode = snapshot.getString("agencyCode") ?: "",
+                        branchName = snapshot.getString("branchName") ?: "",
+                        licenseNumber = snapshot.getString("licenseNumber") ?: "",
+                        email = snapshot.getString("email") ?: (FirebaseAuth.getInstance().currentUser?.email ?: ""),
+                        mobile = snapshot.getString("mobile") ?: "",
+                        photoUri = snapshot.getString("photoUri") ?: "",
+                        themeMode = snapshot.getString("themeMode") ?: "System",
+                        pinCode = snapshot.getString("pinCode") ?: "",
+                        autoLogoutMinutes = (snapshot.getLong("autoLogoutMinutes") ?: 15L).toInt(),
+                        isAutoSyncEnabled = true,
+                        lastSyncedTime = "Just now"
+                    )
+                    trySend(profile)
+                    scope.launch {
+                        agentDao.saveAgentProfile(profile)
+                    }
+                }
+        }
+        awaitClose {
+            job.cancel()
+            listenerRegistration?.remove()
         }
     }
 
-    // Agent profile
-    val agentProfile: Flow<AgentProfileEntity?> = agentDao.getAgentProfile()
-
     suspend fun saveAgentProfile(profile: AgentProfileEntity) {
         agentDao.saveAgentProfile(profile)
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
-            syncManager.backupAgentProfile(uid, profile)
-        }
+        val uid = syncManager.getOrEnsureUid()
+        syncManager.backupAgentProfile(uid, profile)
     }
 
     // Trigger full manual sync / restore
     suspend fun restoreAndSyncAll() {
-        val uid = getCurrentUid()
-        if (!uid.isNullOrBlank()) {
+        val uid = syncManager.getOrEnsureUid()
+        if (uid.isNotBlank()) {
             syncManager.autoRestoreAndSync(uid, db)
         }
     }
 
     // Dashboard Statistics Flow
     val dashboardStats: Flow<DashboardStats> = combine(
-        customerDao.getAllCustomers(),
-        policyDao.getAllPolicies(),
-        paymentDao.getAllPayments()
+        allCustomers,
+        allPolicies,
+        allPayments
     ) { customers, policies, payments ->
         val todayStr = LocalDate.now().toString()
         val currentMonth = LocalDate.now().monthValue
@@ -244,3 +581,4 @@ class LicRepository(
         )
     }
 }
+

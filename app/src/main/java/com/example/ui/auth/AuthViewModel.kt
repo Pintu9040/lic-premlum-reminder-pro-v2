@@ -38,14 +38,14 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val syncManager: FirebaseSyncManager by lazy { FirebaseSyncManager(getApplication()) }
     private val db: AppDatabase by lazy { AppDatabase.getDatabase(getApplication()) }
 
-    private val _authState = MutableStateFlow<AuthState>(AuthState.Loading)
+    private val _authState = MutableStateFlow<AuthState>(AuthState.LoggedOut)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
     private val _forgotPasswordSuccess = MutableStateFlow<String?>(null)
     val forgotPasswordSuccess: StateFlow<String?> = _forgotPasswordSuccess.asStateFlow()
 
     init {
-        checkExistingSession()
+        _authState.value = AuthState.LoggedOut
     }
 
     private fun checkExistingSession() {
