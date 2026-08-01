@@ -28,9 +28,27 @@ class LicApplication : Application() {
                 return
             }
 
-            var app = FirebaseApp.initializeApp(this)
+            var app: FirebaseApp? = try {
+                FirebaseApp.initializeApp(this)
+            } catch (e: Exception) {
+                Log.w("LicApplication", "Default FirebaseApp.initializeApp(this) threw exception: ${e.localizedMessage}")
+                null
+            }
+
             if (app == null) {
-                Log.w("LicApplication", "FirebaseApp.initializeApp(this) returned null. Constructing FirebaseOptions from resources...")
+                Log.w("LicApplication", "Attempting initialization via FirebaseOptions.fromResource(this)...")
+                try {
+                    val options = FirebaseOptions.fromResource(this)
+                    if (options != null) {
+                        app = FirebaseApp.initializeApp(this, options)
+                    }
+                } catch (e: Exception) {
+                    Log.w("LicApplication", "FirebaseOptions.fromResource failed: ${e.localizedMessage}")
+                }
+            }
+
+            if (app == null) {
+                Log.w("LicApplication", "Constructing explicit FirebaseOptions from string resources...")
                 try {
                     val appId = getString(R.string.google_app_id)
                     val apiKey = getString(R.string.google_api_key)
@@ -48,7 +66,7 @@ class LicApplication : Application() {
 
                     app = FirebaseApp.initializeApp(this, options)
                 } catch (e: Exception) {
-                    Log.e("LicApplication", "Failed to initialize Firebase with explicit options from resources", e)
+                    Log.e("LicApplication", "Failed explicit FirebaseOptions initialization", e)
                 }
             }
 
@@ -68,7 +86,3 @@ class LicApplication : Application() {
         }
     }
 }
-
-
-
-
