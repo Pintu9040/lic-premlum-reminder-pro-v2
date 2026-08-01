@@ -3,9 +3,15 @@ package com.example
 import android.app.Application
 import android.util.Log
 import com.google.firebase.FirebaseApp
-import com.google.firebase.FirebaseOptions
 
 class LicApplication : Application() {
+
+    companion object {
+        var isFirebaseInitialized = false
+            private set
+        var firebaseInitializationError: String? = null
+            private set
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -14,37 +20,30 @@ class LicApplication : Application() {
 
     private fun initializeFirebase() {
         try {
-            if (FirebaseApp.getApps(this).isEmpty()) {
-                val app = FirebaseApp.initializeApp(this)
-                if (app == null) {
-                    initFirebaseWithOptions()
-                } else {
-                    Log.i("LicApplication", "FirebaseApp initialized successfully via default resources (google-services.json)")
-                }
-            } else {
-                Log.i("LicApplication", "FirebaseApp already initialized (${FirebaseApp.getApps(this).size} app(s))")
+            if (FirebaseApp.getApps(this).isNotEmpty()) {
+                Log.i("LicApplication", "FirebaseApp already initialized")
+                isFirebaseInitialized = true
+                firebaseInitializationError = null
+                return
             }
-        } catch (e: Throwable) {
-            Log.e("LicApplication", "Default FirebaseApp initialization failed: ${e.localizedMessage}. Attempting initialization with explicit options.", e)
-            initFirebaseWithOptions()
-        }
-    }
 
-    private fun initFirebaseWithOptions() {
-        try {
-            if (FirebaseApp.getApps(this).isEmpty()) {
-                val options = FirebaseOptions.Builder()
-                    .setApiKey("AIzaSyLicReminderProKey2026SecureBuild")
-                    .setApplicationId("1:250618018880:android:a1b2c3d4e5f67890")
-                    .setProjectId("lic-reminder-pro")
-                    .setStorageBucket("lic-reminder-pro.appspot.com")
-                    .build()
-                FirebaseApp.initializeApp(this, options)
-                Log.i("LicApplication", "FirebaseApp successfully initialized via explicit FirebaseOptions")
+            val app = FirebaseApp.initializeApp(this)
+            if (app != null) {
+                isFirebaseInitialized = true
+                firebaseInitializationError = null
+                Log.i("LicApplication", "FirebaseApp successfully initialized with google-services.json")
+            } else {
+                isFirebaseInitialized = false
+                firebaseInitializationError = "FirebaseApp.initializeApp(this) returned null"
+                Log.e("LicApplication", "FirebaseApp.initializeApp(this) returned null")
             }
         } catch (e: Throwable) {
-            Log.e("LicApplication", "CRITICAL ERROR: Failed to initialize Firebase with explicit options: ${e.localizedMessage}", e)
+            isFirebaseInitialized = false
+            firebaseInitializationError = e.localizedMessage ?: e.message ?: "Firebase initialization failed"
+            Log.e("LicApplication", "Failed to initialize FirebaseApp with google-services.json: ${e.localizedMessage}", e)
         }
     }
 }
+
+
 

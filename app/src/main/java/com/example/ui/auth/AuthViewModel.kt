@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.LicApplication
 import com.example.data.local.AgentProfileEntity
 import com.example.data.local.AppDatabase
 import com.example.data.remote.FirebaseSyncManager
@@ -31,16 +32,23 @@ sealed class AuthState {
 }
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
-    private fun getFirebaseAuth(): FirebaseAuth? {
+    private fun getFirebaseAuthResult(): Result<FirebaseAuth> {
         return try {
             if (com.google.firebase.FirebaseApp.getApps(getApplication()).isEmpty()) {
                 Log.w("AuthViewModel", "FirebaseApp not initialized prior to Auth call. Initializing now...")
-                com.google.firebase.FirebaseApp.initializeApp(getApplication())
+                val app = com.google.firebase.FirebaseApp.initializeApp(getApplication())
+                if (app == null) {
+                    val initErr = LicApplication.firebaseInitializationError ?: "FirebaseApp initialization returned null"
+                    Log.e("AuthViewModel", "Firebase initialization failed: $initErr")
+                    return Result.failure(IllegalStateException("Firebase Initialization Failed: $initErr"))
+                }
             }
-            FirebaseAuth.getInstance()
+            val auth = FirebaseAuth.getInstance()
+            Result.success(auth)
         } catch (e: Throwable) {
-            Log.e("AuthViewModel", "Failed to initialize or get FirebaseAuth instance: ${e.localizedMessage}", e)
-            null
+            val msg = e.localizedMessage ?: e.message ?: e.toString()
+            Log.e("AuthViewModel", "Failed to initialize or retrieve FirebaseAuth: $msg", e)
+            Result.failure(e)
         }
     }
 
@@ -62,7 +70,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private fun checkExistingSession() {
         viewModelScope.launch {
             try {
-                val firebaseAuth = getFirebaseAuth()
+                val authResult = getFirebaseAuthResult()
+                val firebaseAuth = authResult.getOrNull()
                 val user = firebaseAuth?.currentUser
                 if (user != null) {
                     val uid = user.uid
@@ -116,20 +125,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         syncManager.autoRestoreAndSync(uid, db)
                     }
                 } else {
-                    // Check if local agent profile exists in Room DB
-                    val localProfile = db.agentDao().getAgentProfileSync()
-                    if (localProfile != null && localProfile.email.isNotBlank()) {
-                        _authState.value = AuthState.LoggedIn(
-                            uid = "local_agent_1",
-                            email = localProfile.email,
-                            name = localProfile.agentName.ifBlank { "Agent" },
-                            agencyCode = localProfile.agencyCode.ifBlank { "LIC-AGENT-89421" },
-                            branchName = localProfile.branchName.ifBlank { "Branch Office" },
-                            mobile = localProfile.mobile
-                        )
-                    } else {
-                        _authState.value = AuthState.LoggedOut
-                    }
+                    _authState.value = AuthState.LoggedOut
                 }
             } catch (e: Throwable) {
                 Log.e("AuthViewModel", "Failed to check existing session", e)
@@ -150,18 +146,18 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
 
-            val firebaseAuth = getFirebaseAuth()
-            if (firebaseAuth == null) {
-                val errorMsg = "Firebase Authentication is unavailable on this device. Verify internet connection."
-                Log.e("AuthViewModel", "Login failed: FirebaseAuth instance is null")
+            val authResult = getFirebaseAuthResult()
+            val firebaseAuth = authResult.getOrElse { throwable ->
+                val errorMsg = throwable.localizedMessage ?: throwable.message ?: "Firebase initialization failed."
+                Log.e("AuthViewModel", "Login aborted: Firebase initialization failed ($errorMsg)", throwable)
                 _authState.value = AuthState.Error(errorMsg)
                 return@launch
             }
 
             try {
                 Log.d("AuthViewModel", "Attempting Firebase signInWithEmailAndPassword for $trimmedEmail")
-                val authResult = firebaseAuth.signInWithEmailAndPassword(trimmedEmail, trimmedPass).await()
-                val user = authResult.user
+                val result = firebaseAuth.signInWithEmailAndPassword(trimmedEmail, trimmedPass).await()
+                val user = result.user
                 if (user != null) {
                     val uid = user.uid
                     var name = user.displayName ?: ""
@@ -212,13 +208,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         syncManager.autoRestoreAndSync(uid, db)
                     }
                 } else {
-                    val errorMsg = "Authentication failed: Empty user account returned."
+                    val errorMsg = "Authentication failed: Empty user account returned from Firebase."
                     Log.e("AuthViewModel", "Login error: $errorMsg")
                     _authState.value = AuthState.Error(errorMsg)
                 }
             } catch (e: Exception) {
-                val errorMsg = e.localizedMessage ?: e.message ?: "Firebase authentication failed (${e.javaClass.simpleName})"
-                Log.e("AuthViewModel", "Firebase sign-in exception: $errorMsg", e)
+                val errorMsg = e.localizedMessage ?: e.message ?: e.toString()
+                Log.e("AuthViewModel", "Firebase signInWithEmailAndPassword exception: $errorMsg", e)
                 _authState.value = AuthState.Error(errorMsg)
             }
         }
@@ -247,10 +243,10 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading
 
-            val firebaseAuth = getFirebaseAuth()
-            if (firebaseAuth == null) {
-                val errorMsg = "Firebase Authentication is unavailable on this device. Verify internet connection."
-                Log.e("AuthViewModel", "Registration failed: FirebaseAuth instance is null")
+            val authResult = getFirebaseAuthResult()
+            val firebaseAuth = authResult.getOrElse { throwable ->
+                val errorMsg = throwable.localizedMessage ?: throwable.message ?: "Firebase initialization failed."
+                Log.e("AuthViewModel", "Registration aborted: Firebase initialization failed ($errorMsg)", throwable)
                 _authState.value = AuthState.Error(errorMsg)
                 return@launch
             }
@@ -294,13 +290,13 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         mobile = profile.mobile
                     )
                 } else {
-                    val errorMsg = "Registration failed: Empty user account returned."
+                    val errorMsg = "Registration failed: Empty user account returned from Firebase."
                     Log.e("AuthViewModel", "Registration error: $errorMsg")
                     _authState.value = AuthState.Error(errorMsg)
                 }
             } catch (e: Exception) {
-                val errorMsg = e.localizedMessage ?: e.message ?: "Firebase registration failed (${e.javaClass.simpleName})"
-                Log.e("AuthViewModel", "Firebase registration exception: $errorMsg", e)
+                val errorMsg = e.localizedMessage ?: e.message ?: e.toString()
+                Log.e("AuthViewModel", "Firebase createUserWithEmailAndPassword exception: $errorMsg", e)
                 _authState.value = AuthState.Error(errorMsg)
             }
         }
@@ -314,9 +310,11 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            val firebaseAuth = getFirebaseAuth()
-            if (firebaseAuth == null) {
-                _authState.value = AuthState.Error("Firebase Authentication service is unavailable on this device.")
+            val authResult = getFirebaseAuthResult()
+            val firebaseAuth = authResult.getOrElse { throwable ->
+                val errorMsg = throwable.localizedMessage ?: throwable.message ?: "Firebase initialization failed."
+                Log.e("AuthViewModel", "Reset password aborted: Firebase initialization failed ($errorMsg)", throwable)
+                _authState.value = AuthState.Error(errorMsg)
                 return@launch
             }
 
@@ -324,7 +322,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 firebaseAuth.sendPasswordResetEmail(trimmedEmail).await()
                 _forgotPasswordSuccess.value = "Password reset email sent to $trimmedEmail. Please check your inbox."
             } catch (e: Exception) {
-                val errorMsg = e.localizedMessage ?: e.message ?: "Failed to send reset email"
+                val errorMsg = e.localizedMessage ?: e.message ?: e.toString()
                 Log.e("AuthViewModel", "Reset password request failed: $errorMsg", e)
                 _authState.value = AuthState.Error(errorMsg)
             }
@@ -338,7 +336,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         viewModelScope.launch {
             try {
-                getFirebaseAuth()?.signOut()
+                getFirebaseAuthResult().getOrNull()?.signOut()
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Logout error", e)
             }
