@@ -1,0 +1,18 @@
+Generate a complete GitHub Actions workflow for Android.
+
+File name:
+.github/workflows/android-build-v3.yml
+
+Replace all existing sample content.
+
+Requirements:
+- Ubuntu latest
+- Java 17
+- Gradle cache
+- chmod +x gradlew
+- ./gradlew clean
+- ./gradlew assembleDebug
+- Upload app/build/outputs/apk/debug/app-debug.apk
+- Trigger on push to main and workflow_dispatch
+- Fail if google-services.json is missing
+- Commit the workflow to GitHub
