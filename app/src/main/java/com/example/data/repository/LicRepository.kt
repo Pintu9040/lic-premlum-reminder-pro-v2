@@ -346,7 +346,7 @@ class LicRepository(
 
     fun getPaymentsByPolicyId(policyId: Long): Flow<List<PaymentEntity>> = paymentDao.getPaymentsByPolicyId(policyId)
 
-    suspend fun collectPremium(payment: PaymentEntity, nextDueDate: String) {
+    suspend fun collectPremium(payment: PaymentEntity, nextDueDate: String? = null) {
         val newPaymentId = if (payment.id == 0L) System.currentTimeMillis() else payment.id
         val insertedPayment = payment.copy(id = newPaymentId)
 
@@ -356,12 +356,7 @@ class LicRepository(
         val uid = syncManager.getOrEnsureUid()
 
         if (policy != null) {
-            val updatedPolicy = policy.copy(
-                dueDate = nextDueDate,
-                status = "Active"
-            )
-            policyDao.updatePolicy(updatedPolicy)
-            syncManager.backupPolicy(uid, updatedPolicy)
+            recalculatePolicyAndDueDate(policy, nextDueDate)
         }
 
         syncManager.backupPayment(uid, insertedPayment)
@@ -372,6 +367,11 @@ class LicRepository(
         paymentDao.updatePayment(payment)
 
         val uid = syncManager.getOrEnsureUid()
+        val policy = policyDao.getPolicyById(payment.policyId)
+        if (policy != null) {
+            recalculatePolicyAndDueDate(policy, null)
+        }
+
         syncManager.backupPayment(uid, payment)
         syncManager.backupReminders(uid, db)
     }
@@ -380,8 +380,56 @@ class LicRepository(
         paymentDao.deletePayment(payment)
 
         val uid = syncManager.getOrEnsureUid()
+        val policy = policyDao.getPolicyById(payment.policyId)
+        if (policy != null) {
+            recalculatePolicyAndDueDate(policy, null)
+        }
+
         syncManager.deletePaymentInCloud(uid, payment.id)
         syncManager.backupReminders(uid, db)
+    }
+
+    private suspend fun recalculatePolicyAndDueDate(policy: PolicyEntity, providedNextDueDate: String?) {
+        val uid = syncManager.getOrEnsureUid()
+        val allPaymentsForPolicy = paymentDao.getAllPaymentsSync().filter { it.policyId == policy.id }
+        val totalPaid = allPaymentsForPolicy.sumOf { it.paidAmount }
+        val installment = policy.premiumAmount
+
+        if (installment <= 0) return
+
+        val completedCycles = (totalPaid / installment).toInt()
+        
+        val updatedDueDate = if (providedNextDueDate != null && providedNextDueDate.isNotBlank()) {
+            providedNextDueDate
+        } else if (completedCycles > 0) {
+            val baseDateStr = if (policy.issueDate.isNotBlank()) policy.issueDate else policy.dueDate
+            var calculatedDate = baseDateStr
+            for (i in 0 until completedCycles) {
+                calculatedDate = advanceDueDate(calculatedDate, policy.premiumMode)
+            }
+            calculatedDate
+        } else {
+            policy.dueDate
+        }
+
+        val updatedPolicy = policy.copy(
+            dueDate = updatedDueDate,
+            status = "Active"
+        )
+        policyDao.updatePolicy(updatedPolicy)
+        syncManager.backupPolicy(uid, updatedPolicy)
+    }
+
+    private fun advanceDueDate(currentDue: String, mode: String): String {
+        val baseDate = try { LocalDate.parse(currentDue) } catch (e: Exception) { LocalDate.now() }
+        val nextDate = when (mode) {
+            "Monthly" -> baseDate.plusMonths(1)
+            "Quarterly" -> baseDate.plusMonths(3)
+            "Half-Yearly" -> baseDate.plusMonths(6)
+            "Yearly" -> baseDate.plusYears(1)
+            else -> baseDate.plusMonths(6)
+        }
+        return nextDate.toString()
     }
 
     // --- Documents Firestore Flow & Operations ---
@@ -580,5 +628,14 @@ class LicRepository(
             outstandingAmount = totalOutstanding
         )
     }
+
+    // --- Follow-Up Operations ---
+    val allFollowUps: Flow<List<FollowUpEntity>> = db.followUpDao().getAllFollowUps()
+
+    suspend fun insertFollowUp(followUp: FollowUpEntity): Long = db.followUpDao().insertFollowUp(followUp)
+
+    suspend fun updateFollowUp(followUp: FollowUpEntity) = db.followUpDao().updateFollowUp(followUp)
+
+    suspend fun deleteFollowUp(followUp: FollowUpEntity) = db.followUpDao().deleteFollowUp(followUp)
 }
 

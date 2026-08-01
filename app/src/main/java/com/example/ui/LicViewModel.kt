@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-enum class PolicyFilterStatus { ALL, ACTIVE, LAPSED, PAID_UP }
+enum class PolicyFilterStatus { ALL, ACTIVE, DUE, LAPSED, MATURED }
+enum class PolicyModeFilter { ALL, MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY }
+enum class PolicySortOption { NEXT_DUE, PREMIUM_AMOUNT, CUSTOMER_NAME, RECENTLY_ADDED }
 enum class PolicyFilterDue { ALL, DUE_TODAY, DUE_THIS_MONTH, OVERDUE, UPCOMING }
 enum class CustomerFilterStatus { ALL, ACTIVE, DUE, LAPSED }
 
@@ -45,6 +47,12 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _statusFilter = MutableStateFlow(PolicyFilterStatus.ALL)
     val statusFilter: StateFlow<PolicyFilterStatus> = _statusFilter.asStateFlow()
+
+    private val _modeFilter = MutableStateFlow(PolicyModeFilter.ALL)
+    val modeFilter: StateFlow<PolicyModeFilter> = _modeFilter.asStateFlow()
+
+    private val _sortOption = MutableStateFlow(PolicySortOption.NEXT_DUE)
+    val sortOption: StateFlow<PolicySortOption> = _sortOption.asStateFlow()
 
     private val _dueFilter = MutableStateFlow(PolicyFilterDue.ALL)
     val dueFilter: StateFlow<PolicyFilterDue> = _dueFilter.asStateFlow()
@@ -120,27 +128,53 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
     val policies: StateFlow<List<PolicyEntity>> = combine(
         repository.allPolicies,
+        repository.allCustomers,
         _searchQuery,
         _statusFilter,
-        _dueFilter
-    ) { list, query, status, due ->
+        _modeFilter,
+        _dueFilter,
+        _sortOption
+    ) { flows: Array<Any> ->
+        @Suppress("UNCHECKED_CAST")
+        val list = flows[0] as List<PolicyEntity>
+        @Suppress("UNCHECKED_CAST")
+        val customersList = flows[1] as List<CustomerEntity>
+        val query = flows[2] as String
+        val status = flows[3] as PolicyFilterStatus
+        val mode = flows[4] as PolicyModeFilter
+        val due = flows[5] as PolicyFilterDue
+        val sort = flows[6] as PolicySortOption
+
         val todayStr = LocalDate.now().toString()
         val currentMonth = LocalDate.now().monthValue
         val currentYear = LocalDate.now().year
 
-        list.filter { policy ->
-            // Search matching
+        val filtered = list.filter { policy ->
+            val linkedCustomer = customersList.find { it.id == policy.customerId }
+
+            // Search matching (Customer Name, Policy #, Plan Name, Phone Number)
             val matchesQuery = query.isBlank() ||
                     policy.policyNumber.contains(query, ignoreCase = true) ||
                     policy.planName.contains(query, ignoreCase = true) ||
-                    policy.customerName.contains(query, ignoreCase = true)
+                    policy.customerName.contains(query, ignoreCase = true) ||
+                    (linkedCustomer != null && (linkedCustomer.mobile.contains(query) || linkedCustomer.whatsapp.contains(query)))
 
             // Status filter matching
             val matchesStatus = when (status) {
                 PolicyFilterStatus.ALL -> true
                 PolicyFilterStatus.ACTIVE -> policy.status.equals("Active", ignoreCase = true)
+                PolicyFilterStatus.DUE -> policy.status.equals("Due", ignoreCase = true) || policy.status.equals("Grace", ignoreCase = true)
                 PolicyFilterStatus.LAPSED -> policy.status.equals("Lapsed", ignoreCase = true)
-                PolicyFilterStatus.PAID_UP -> policy.status.equals("Paid-up", ignoreCase = true)
+                PolicyFilterStatus.MATURED -> policy.status.equals("Matured", ignoreCase = true)
+            }
+
+            // Mode filter matching
+            val matchesMode = when (mode) {
+                PolicyModeFilter.ALL -> true
+                PolicyModeFilter.MONTHLY -> policy.premiumMode.equals("Monthly", ignoreCase = true)
+                PolicyModeFilter.QUARTERLY -> policy.premiumMode.equals("Quarterly", ignoreCase = true)
+                PolicyModeFilter.HALF_YEARLY -> policy.premiumMode.equals("Half-Yearly", ignoreCase = true)
+                PolicyModeFilter.YEARLY -> policy.premiumMode.equals("Yearly", ignoreCase = true)
             }
 
             // Due filter matching
@@ -153,7 +187,14 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                 PolicyFilterDue.UPCOMING -> policyDueDate != null && policyDueDate.isAfter(LocalDate.now())
             }
 
-            matchesQuery && matchesStatus && matchesDue
+            matchesQuery && matchesStatus && matchesMode && matchesDue
+        }
+
+        when (sort) {
+            PolicySortOption.NEXT_DUE -> filtered.sortedBy { it.dueDate }
+            PolicySortOption.PREMIUM_AMOUNT -> filtered.sortedByDescending { it.premiumAmount }
+            PolicySortOption.CUSTOMER_NAME -> filtered.sortedBy { it.customerName.lowercase() }
+            PolicySortOption.RECENTLY_ADDED -> filtered.sortedByDescending { it.id }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -255,6 +296,12 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = null
     )
 
+    val followUps: StateFlow<List<FollowUpEntity>> = repository.allFollowUps.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }
@@ -265,6 +312,14 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setStatusFilter(filter: PolicyFilterStatus) {
         _statusFilter.value = filter
+    }
+
+    fun setModeFilter(filter: PolicyModeFilter) {
+        _modeFilter.value = filter
+    }
+
+    fun setSortOption(option: PolicySortOption) {
+        _sortOption.value = option
     }
 
     fun setDueFilter(filter: PolicyFilterDue) {
@@ -330,13 +385,14 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         paidAmount: Double,
         lateFee: Double = 0.0,
         paymentMode: String,
-        receiptNo: String,
-        notes: String,
-        onSuccess: () -> Unit
+        receiptNo: String = "",
+        paymentDate: String = "",
+        notes: String = "",
+        onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
-            val today = LocalDate.now().toString()
-            val nextDueDate = calculateNextDueDate(policy.dueDate, policy.premiumMode)
+            val dateStr = if (paymentDate.isNotBlank()) paymentDate else LocalDate.now().toString()
+            val generatedReceipt = if (receiptNo.isNotBlank()) receiptNo else "REC-${System.currentTimeMillis()}"
 
             val payment = PaymentEntity(
                 policyId = policy.id,
@@ -345,13 +401,13 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                 customerName = policy.customerName,
                 paidAmount = paidAmount,
                 lateFee = lateFee,
-                paymentDate = today,
+                paymentDate = dateStr,
                 paymentMode = paymentMode,
-                receiptNumber = receiptNo.ifBlank { "REC-${System.currentTimeMillis().toString().takeLast(6)}" },
+                receiptNumber = generatedReceipt,
                 notes = notes
             )
 
-            repository.collectPremium(payment, nextDueDate)
+            repository.collectPremium(payment)
             onSuccess()
         }
     }
@@ -408,16 +464,54 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // FollowUp Actions
+    fun addFollowUp(followUp: FollowUpEntity, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.insertFollowUp(followUp)
+            onComplete()
+        }
+    }
+
+    fun updateFollowUp(followUp: FollowUpEntity, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            repository.updateFollowUp(followUp)
+            onComplete()
+        }
+    }
+
+    fun deleteFollowUp(followUp: FollowUpEntity) {
+        viewModelScope.launch {
+            repository.deleteFollowUp(followUp)
+        }
+    }
+
     // WhatsApp Message Templates
-    fun generatePremiumReminderMsg(customerName: String, policyNo: String, planName: String, amount: Double, dueDate: String): String {
-        val agent = agentProfile.value?.agentName ?: "LIC Agent"
+    fun generatePremiumReminderMsg(
+        customerName: String,
+        policyNo: String,
+        planName: String,
+        amount: Double,
+        dueDate: String,
+        outstandingBalance: Double = 0.0
+    ): String {
+        val agent = agentProfile.value?.agentName.takeIf { !it.isNullOrBlank() } ?: "LIC Advisor"
         val mobile = agentProfile.value?.mobile ?: ""
+        val branch = agentProfile.value?.branchName ?: ""
+        val agencyCode = agentProfile.value?.agencyCode ?: ""
+        val outstandingStr = if (outstandingBalance > 0) "• Outstanding Balance: ₹${"%.2f".format(outstandingBalance)}\n" else ""
+
         return "Dear $customerName,\n\n" +
-                "This is a gentle reminder regarding your LIC Policy No: $policyNo ($planName).\n" +
+                "This is an official reminder regarding your LIC Policy No: $policyNo ($planName).\n\n" +
                 "• Premium Amount: ₹${"%.2f".format(amount)}\n" +
-                "• Due Date: $dueDate\n\n" +
-                "Kindly pay your premium on time to maintain full life coverage and policy benefits.\n\n" +
-                "Regards,\n$agent\n$mobile"
+                "• Due Date: $dueDate\n" +
+                outstandingStr +
+                "• Advisor Name: $agent\n" +
+                (if (agencyCode.isNotBlank()) "• Agency Code: $agencyCode\n" else "") +
+                (if (branch.isNotBlank()) "• Branch: $branch\n" else "") +
+                "\nKindly pay your premium on time to ensure uninterrupted life cover and policy bonuses.\n\n" +
+                "Warm Regards,\n" +
+                "$agent (LIC Insurance Advisor)\n" +
+                (if (mobile.isNotBlank()) "Contact: $mobile" else "")
     }
 
     fun generateBirthdayWishMsg(customerName: String): String {

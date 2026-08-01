@@ -2,6 +2,7 @@ package com.example
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -18,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -133,17 +136,61 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+sealed class ScreenDestination {
+    object Dashboard : ScreenDestination()
+    object Customers : ScreenDestination()
+    data class CustomerDetail(val customer: CustomerEntity) : ScreenDestination()
+    object Policies : ScreenDestination()
+    data class PolicyDetail(val policy: PolicyEntity) : ScreenDestination()
+    object Reminders : ScreenDestination()
+    object Payments : ScreenDestination()
+    object Reports : ScreenDestination()
+    object Documents : ScreenDestination()
+    object Settings : ScreenDestination()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppContent(
     licViewModel: LicViewModel,
     authViewModel: AuthViewModel
 ) {
-    var currentTab by remember { mutableStateOf(AppNavigationTab.DASHBOARD) }
+    val backStack = remember { mutableStateListOf<ScreenDestination>(ScreenDestination.Dashboard) }
+    val currentDestination = backStack.lastOrNull() ?: ScreenDestination.Dashboard
 
-    // Navigation Sub-states
-    var selectedCustomer by remember { mutableStateOf<CustomerEntity?>(null) }
-    var selectedPolicy by remember { mutableStateOf<PolicyEntity?>(null) }
+    fun navigateTo(destination: ScreenDestination) {
+        if (currentDestination == destination) return
+        if (destination == ScreenDestination.Dashboard) {
+            backStack.clear()
+            backStack.add(ScreenDestination.Dashboard)
+        } else {
+            backStack.add(destination)
+        }
+    }
+
+    fun handleBackPress() {
+        if (backStack.size > 1) {
+            backStack.removeAt(backStack.lastIndex)
+        } else {
+            backStack.clear()
+            backStack.add(ScreenDestination.Dashboard)
+        }
+    }
+
+    BackHandler(enabled = currentDestination != ScreenDestination.Dashboard) {
+        handleBackPress()
+    }
+
+    val currentTab = when (currentDestination) {
+        ScreenDestination.Dashboard -> AppNavigationTab.DASHBOARD
+        ScreenDestination.Customers, is ScreenDestination.CustomerDetail -> AppNavigationTab.CUSTOMERS
+        ScreenDestination.Policies, is ScreenDestination.PolicyDetail -> AppNavigationTab.POLICIES
+        ScreenDestination.Reminders -> AppNavigationTab.REMINDERS
+        ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
+        ScreenDestination.Reports -> AppNavigationTab.REPORTS
+        ScreenDestination.Documents -> AppNavigationTab.DOCUMENTS
+        ScreenDestination.Settings -> AppNavigationTab.SETTINGS
+    }
 
     // Dialog States
     var showAddCustomerDialog by remember { mutableStateOf(false) }
@@ -154,9 +201,52 @@ fun MainAppContent(
 
     var policyForPaymentCollection by remember { mutableStateOf<PolicyEntity?>(null) }
 
+    val context = LocalContext.current
     val customers by licViewModel.customers.collectAsState()
+    val policies by licViewModel.policies.collectAsState()
 
     Scaffold(
+        topBar = {
+            if (currentDestination != ScreenDestination.Dashboard &&
+                currentDestination !is ScreenDestination.CustomerDetail &&
+                currentDestination !is ScreenDestination.PolicyDetail
+            ) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = when (currentDestination) {
+                                is ScreenDestination.Customers -> "Clients Directory"
+                                is ScreenDestination.Policies -> "Policy Portfolio"
+                                is ScreenDestination.Reminders -> "Reminders & Dues"
+                                is ScreenDestination.Payments -> "Payment History"
+                                is ScreenDestination.Reports -> "Reports & Analytics"
+                                is ScreenDestination.Documents -> "Document Locker"
+                                is ScreenDestination.Settings -> "Profile & Settings"
+                                else -> ""
+                            },
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    navigationIcon = {
+                        IconButton(
+                            onClick = { handleBackPress() },
+                            modifier = Modifier.testTag("top_bar_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back"
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = RoyalBluePrimary,
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White,
+                        actionIconContentColor = Color.White
+                    )
+                )
+            }
+        },
         bottomBar = {
             NavigationBar(
                 containerColor = RoyalBluePrimary,
@@ -164,11 +254,7 @@ fun MainAppContent(
             ) {
                 NavigationBarItem(
                     selected = currentTab == AppNavigationTab.DASHBOARD,
-                    onClick = {
-                        currentTab = AppNavigationTab.DASHBOARD
-                        selectedCustomer = null
-                        selectedPolicy = null
-                    },
+                    onClick = { navigateTo(ScreenDestination.Dashboard) },
                     icon = { Icon(Icons.Default.Dashboard, contentDescription = "Home") },
                     label = { Text("Home") },
                     modifier = Modifier.testTag("nav_tab_dashboard"),
@@ -183,11 +269,7 @@ fun MainAppContent(
 
                 NavigationBarItem(
                     selected = currentTab == AppNavigationTab.CUSTOMERS,
-                    onClick = {
-                        currentTab = AppNavigationTab.CUSTOMERS
-                        selectedCustomer = null
-                        selectedPolicy = null
-                    },
+                    onClick = { navigateTo(ScreenDestination.Customers) },
                     icon = { Icon(Icons.Default.People, contentDescription = "Customers") },
                     label = { Text("Clients") },
                     modifier = Modifier.testTag("nav_tab_customers"),
@@ -202,11 +284,7 @@ fun MainAppContent(
 
                 NavigationBarItem(
                     selected = currentTab == AppNavigationTab.POLICIES,
-                    onClick = {
-                        currentTab = AppNavigationTab.POLICIES
-                        selectedCustomer = null
-                        selectedPolicy = null
-                    },
+                    onClick = { navigateTo(ScreenDestination.Policies) },
                     icon = { Icon(Icons.Default.FolderSpecial, contentDescription = "Policies") },
                     label = { Text("Policies") },
                     modifier = Modifier.testTag("nav_tab_policies"),
@@ -221,11 +299,7 @@ fun MainAppContent(
 
                 NavigationBarItem(
                     selected = currentTab == AppNavigationTab.REMINDERS,
-                    onClick = {
-                        currentTab = AppNavigationTab.REMINDERS
-                        selectedCustomer = null
-                        selectedPolicy = null
-                    },
+                    onClick = { navigateTo(ScreenDestination.Reminders) },
                     icon = { Icon(Icons.Default.NotificationsActive, contentDescription = "Reminders") },
                     label = { Text("Reminders") },
                     modifier = Modifier.testTag("nav_tab_reminders"),
@@ -243,11 +317,7 @@ fun MainAppContent(
                             currentTab == AppNavigationTab.REPORTS ||
                             currentTab == AppNavigationTab.DOCUMENTS ||
                             currentTab == AppNavigationTab.PAYMENTS,
-                    onClick = {
-                        currentTab = AppNavigationTab.SETTINGS
-                        selectedCustomer = null
-                        selectedPolicy = null
-                    },
+                    onClick = { navigateTo(ScreenDestination.Settings) },
                     icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More") },
                     label = { Text("More") },
                     modifier = Modifier.testTag("nav_tab_more"),
@@ -262,7 +332,7 @@ fun MainAppContent(
             }
         },
         floatingActionButton = {
-            if (currentTab == AppNavigationTab.CUSTOMERS && selectedCustomer == null) {
+            if (currentDestination is ScreenDestination.Customers) {
                 FloatingActionButton(
                     onClick = { showAddCustomerDialog = true },
                     containerColor = AccentOrange,
@@ -271,7 +341,7 @@ fun MainAppContent(
                 ) {
                     Icon(Icons.Default.PersonAdd, contentDescription = "Add Customer")
                 }
-            } else if (currentTab == AppNavigationTab.POLICIES && selectedPolicy == null) {
+            } else if (currentDestination is ScreenDestination.Policies) {
                 FloatingActionButton(
                     onClick = { showAddPolicyDialog = true },
                     containerColor = AccentOrange,
@@ -307,103 +377,108 @@ fun MainAppContent(
                 ) {
                     Tab(
                         selected = currentTab == AppNavigationTab.PAYMENTS,
-                        onClick = { currentTab = AppNavigationTab.PAYMENTS },
+                        onClick = { navigateTo(ScreenDestination.Payments) },
                         text = { Text("Payments", color = Color.White, fontWeight = FontWeight.Bold) }
                     )
                     Tab(
                         selected = currentTab == AppNavigationTab.REPORTS,
-                        onClick = { currentTab = AppNavigationTab.REPORTS },
+                        onClick = { navigateTo(ScreenDestination.Reports) },
                         text = { Text("Reports", color = Color.White, fontWeight = FontWeight.Bold) }
                     )
                     Tab(
                         selected = currentTab == AppNavigationTab.DOCUMENTS,
-                        onClick = { currentTab = AppNavigationTab.DOCUMENTS },
+                        onClick = { navigateTo(ScreenDestination.Documents) },
                         text = { Text("Documents", color = Color.White, fontWeight = FontWeight.Bold) }
                     )
                     Tab(
                         selected = currentTab == AppNavigationTab.SETTINGS,
-                        onClick = { currentTab = AppNavigationTab.SETTINGS },
+                        onClick = { navigateTo(ScreenDestination.Settings) },
                         text = { Text("Profile & Settings", color = Color.White, fontWeight = FontWeight.Bold) }
                     )
                 }
             }
 
             Box(modifier = Modifier.weight(1f)) {
-                when (currentTab) {
-                    AppNavigationTab.DASHBOARD -> {
+                when (currentDestination) {
+                    is ScreenDestination.Dashboard -> {
                         DashboardScreen(
                             viewModel = licViewModel,
-                            onNavigateToCustomers = { currentTab = AppNavigationTab.CUSTOMERS },
-                            onNavigateToPolicies = { currentTab = AppNavigationTab.POLICIES },
-                            onNavigateToReminders = { currentTab = AppNavigationTab.REMINDERS },
-                            onNavigateToPayments = { currentTab = AppNavigationTab.PAYMENTS },
-                            onNavigateToReports = { currentTab = AppNavigationTab.REPORTS },
+                            onNavigateToCustomers = { navigateTo(ScreenDestination.Customers) },
+                            onNavigateToPolicies = { navigateTo(ScreenDestination.Policies) },
+                            onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
+                            onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
+                            onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
                             onAddCustomer = { showAddCustomerDialog = true },
                             onAddPolicy = { showAddPolicyDialog = true },
                             onCollectPremium = { policyForPaymentCollection = it }
                         )
                     }
 
-                    AppNavigationTab.CUSTOMERS -> {
-                        val customersList by licViewModel.customers.collectAsState()
-                        val activeCustomer = customersList.find { it.id == selectedCustomer?.id } ?: selectedCustomer
-                        if (activeCustomer != null) {
-                            CustomerDetailScreen(
-                                customer = activeCustomer,
-                                viewModel = licViewModel,
-                                onEditCustomer = { customerToEdit = activeCustomer },
-                                onAddPolicyForCustomer = { showAddPolicyDialog = true },
-                                onBack = { selectedCustomer = null }
-                            )
-                        } else {
-                            CustomerListScreen(
-                                viewModel = licViewModel,
-                                onSelectCustomer = { selectedCustomer = it },
-                                onAddCustomer = { showAddCustomerDialog = true }
-                            )
-                        }
-                    }
-
-                    AppNavigationTab.POLICIES -> {
-                        val activePolicy = selectedPolicy
-                        if (activePolicy != null) {
-                            PolicyDetailScreen(
-                                policy = activePolicy,
-                                viewModel = licViewModel,
-                                onEditPolicy = { policyToEdit = activePolicy },
-                                onCollectPremium = { policyForPaymentCollection = activePolicy },
-                                onBack = { selectedPolicy = null }
-                            )
-                        } else {
-                            PolicyListScreen(
-                                viewModel = licViewModel,
-                                onSelectPolicy = { selectedPolicy = it },
-                                onAddPolicy = { showAddPolicyDialog = true },
-                                onCollectPremium = { policyForPaymentCollection = it }
-                            )
-                        }
-                    }
-
-                    AppNavigationTab.REMINDERS -> {
-                        ReminderListScreen(
+                    is ScreenDestination.Customers -> {
+                        CustomerListScreen(
                             viewModel = licViewModel,
+                            onSelectCustomer = { navigateTo(ScreenDestination.CustomerDetail(it)) },
+                            onAddCustomer = { showAddCustomerDialog = true }
+                        )
+                    }
+
+                    is ScreenDestination.CustomerDetail -> {
+                        val cust = (currentDestination as ScreenDestination.CustomerDetail).customer
+                        val activeCustomer = customers.find { it.id == cust.id } ?: cust
+                        CustomerDetailScreen(
+                            customer = activeCustomer,
+                            viewModel = licViewModel,
+                            onEditCustomer = { customerToEdit = activeCustomer },
+                            onAddPolicyForCustomer = { showAddPolicyDialog = true },
+                            onBack = { handleBackPress() }
+                        )
+                    }
+
+                    is ScreenDestination.Policies -> {
+                        PolicyListScreen(
+                            viewModel = licViewModel,
+                            onSelectPolicy = { navigateTo(ScreenDestination.PolicyDetail(it)) },
+                            onAddPolicy = { showAddPolicyDialog = true },
                             onCollectPremium = { policyForPaymentCollection = it }
                         )
                     }
 
-                    AppNavigationTab.PAYMENTS -> {
+                    is ScreenDestination.PolicyDetail -> {
+                        val pol = (currentDestination as ScreenDestination.PolicyDetail).policy
+                        val policiesList by licViewModel.policies.collectAsState()
+                        val activePolicy = policiesList.find { it.id == pol.id } ?: pol
+                        PolicyDetailScreen(
+                            policy = activePolicy,
+                            viewModel = licViewModel,
+                            onEditPolicy = { policyToEdit = activePolicy },
+                            onCollectPremium = { policyForPaymentCollection = activePolicy },
+                            onBack = { handleBackPress() }
+                        )
+                    }
+
+                    is ScreenDestination.Reminders -> {
+                        ReminderListScreen(
+                            viewModel = licViewModel,
+                            onCollectPremium = { policyForPaymentCollection = it },
+                            onViewCustomerProfile = { cust -> navigateTo(ScreenDestination.CustomerDetail(cust)) },
+                            onViewPolicyDetail = { pol -> navigateTo(ScreenDestination.PolicyDetail(pol)) },
+                            onBack = { handleBackPress() }
+                        )
+                    }
+
+                    is ScreenDestination.Payments -> {
                         PaymentHistoryScreen(viewModel = licViewModel)
                     }
 
-                    AppNavigationTab.REPORTS -> {
+                    is ScreenDestination.Reports -> {
                         ReportScreen(viewModel = licViewModel)
                     }
 
-                    AppNavigationTab.DOCUMENTS -> {
+                    is ScreenDestination.Documents -> {
                         DocumentListScreen(viewModel = licViewModel)
                     }
 
-                    AppNavigationTab.SETTINGS -> {
+                    is ScreenDestination.Settings -> {
                         SettingsScreen(
                             viewModel = licViewModel,
                             onLogout = { authViewModel.logout() }
@@ -439,6 +514,7 @@ fun MainAppContent(
         AddEditPolicyDialog(
             initialPolicy = policyToEdit,
             customersList = customers,
+            existingPolicies = policies,
             onDismiss = {
                 showAddPolicyDialog = false
                 policyToEdit = null
@@ -446,8 +522,10 @@ fun MainAppContent(
             onSave = { policy ->
                 if (policyToEdit != null) {
                     licViewModel.updatePolicy(policy)
+                    android.widget.Toast.makeText(context, "Policy updated successfully!", android.widget.Toast.LENGTH_SHORT).show()
                 } else {
                     licViewModel.addPolicy(policy)
+                    android.widget.Toast.makeText(context, "Policy added successfully!", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 showAddPolicyDialog = false
                 policyToEdit = null

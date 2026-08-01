@@ -15,9 +15,10 @@ import kotlinx.coroutines.launch
         PolicyEntity::class,
         PaymentEntity::class,
         DocumentEntity::class,
-        AgentProfileEntity::class
+        AgentProfileEntity::class,
+        FollowUpEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun paymentDao(): PaymentDao
     abstract fun documentDao(): DocumentDao
     abstract fun agentDao(): AgentDao
+    abstract fun followUpDao(): FollowUpDao
 
     companion object {
         @Volatile
@@ -63,6 +65,7 @@ abstract class AppDatabase : RoomDatabase() {
             val policyDao = db.policyDao()
             val paymentDao = db.paymentDao()
             val documentDao = db.documentDao()
+            val followUpDao = db.followUpDao()
 
             // Agent profile
             agentDao.saveAgentProfile(
@@ -244,6 +247,41 @@ abstract class AppDatabase : RoomDatabase() {
                     fileUri = "content://vault/Priya_PAN_Scan.jpg",
                     fileSize = "850 KB",
                     uploadDate = "2026-02-01"
+                )
+            )
+
+            // Sample Follow-ups
+            followUpDao.insertFollowUp(
+                FollowUpEntity(
+                    customerId = c1Id,
+                    customerName = "Rajesh Sharma",
+                    customerMobile = "+91 9876543210",
+                    date = todayStr,
+                    time = "10:30 AM",
+                    notes = "Call regarding Jeevan Labh premium collection.",
+                    status = "Pending"
+                )
+            )
+            followUpDao.insertFollowUp(
+                FollowUpEntity(
+                    customerId = c2Id,
+                    customerName = "Priya Verma",
+                    customerMobile = "+91 9123456789",
+                    date = java.time.LocalDate.now().plusDays(1).toString(),
+                    time = "02:00 PM",
+                    notes = "Discuss Jeevan Umang maturity benefits and new investment options.",
+                    status = "Pending"
+                )
+            )
+            followUpDao.insertFollowUp(
+                FollowUpEntity(
+                    customerId = c3Id,
+                    customerName = "Amitabh Gupta",
+                    customerMobile = "+91 9988776655",
+                    date = java.time.LocalDate.now().minusDays(1).toString(),
+                    time = "04:30 PM",
+                    notes = "Provide revival quote for lapsed Endowment plan.",
+                    status = "Completed"
                 )
             )
         }

@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,7 +63,6 @@ fun DashboardScreen(
     val stats by viewModel.dashboardStats.collectAsState()
     val policies by viewModel.policies.collectAsState()
     val customers by viewModel.customers.collectAsState()
-    val payments by viewModel.payments.collectAsState()
     val agentProfile by viewModel.agentProfile.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
 
@@ -113,20 +113,20 @@ fun DashboardScreen(
             .background(MaterialTheme.colorScheme.background)
             .verticalScroll(rememberScrollState())
     ) {
-        // Hero Header: Agent Profile Section & Greeting
+        // Redesigned Compact Blue Header
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
+                .clip(RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp))
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
                             RoyalBluePrimary,
-                            RoyalBlueLight
+                            RoyalBlueDark
                         )
                     )
                 )
-                .padding(20.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
             Column {
                 // Agent Profile Header Row
@@ -139,75 +139,100 @@ fun DashboardScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.weight(1f)
                     ) {
-                        // Agent Avatar with Photo Placeholder / Initials
+                        // Editable Agent Avatar with Camera Icon Overlay
                         Box(
                             modifier = Modifier
-                                .size(54.dp)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                                .border(2.dp, AccentOrange, CircleShape),
-                            contentAlignment = Alignment.Center
+                                .size(48.dp)
+                                .clickable { onNavigateToReports() }
                         ) {
-                            Text(
-                                text = (agentProfile?.agentName ?: "Agent").take(2).uppercase(),
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = RoyalBluePrimary
-                                )
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape)
+                                    .background(Color.White)
+                                    .border(2.dp, AccentOrange, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
                                 Text(
-                                    text = "$timeOfDayGreeting 👋",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = AccentOrangeLight,
-                                        fontWeight = FontWeight.SemiBold
+                                    text = (agentProfile?.agentName ?: "Agent").take(2).uppercase(),
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = RoyalBluePrimary,
+                                        fontSize = 16.sp
                                     )
                                 )
                             }
+                            // Small Camera Icon Badge
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .clip(CircleShape)
+                                    .background(AccentOrange)
+                                    .border(1.dp, Color.White, CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PhotoCamera,
+                                    contentDescription = "Edit Profile Photo",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(9.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Column {
+                            Text(
+                                text = "$timeOfDayGreeting 👋",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = AccentOrangeLight,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp
+                                )
+                            )
                             Text(
                                 text = agentProfile?.agentName ?: "Pintu Ojha",
-                                style = MaterialTheme.typography.titleLarge.copy(
+                                style = MaterialTheme.typography.titleMedium.copy(
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White,
-                                    fontSize = 20.sp
+                                    fontSize = 18.sp
                                 ),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "Code: ${agentProfile?.agencyCode ?: "LIC-AG-89421"} | ${agentProfile?.branchName ?: "Branch 883"}",
+                                text = "Code: ${agentProfile?.agencyCode ?: "LIC-AG-89421"} • ${agentProfile?.branchName ?: "Branch 883"}",
                                 style = MaterialTheme.typography.bodySmall.copy(
                                     color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 12.sp
+                                    fontSize = 11.sp
                                 )
                             )
                         }
                     }
 
-                    // Performance Badge
+                    // Compact Club Member Pill
                     Box(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color.White.copy(alpha = 0.18f))
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .clip(RoundedCornerShape(50.dp))
+                            .background(Color.White.copy(alpha = 0.2f))
+                            .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(50.dp))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Default.WorkspacePremium,
                                 contentDescription = null,
                                 tint = AccentOrangeLight,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "Club Member",
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontWeight = FontWeight.Bold,
+                                    fontSize = 10.sp,
                                     color = Color.White
                                 )
                             )
@@ -215,9 +240,9 @@ fun DashboardScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(18.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                // Search Bar integrated into Header
+                // Modern Search Bar with Filter Icon
                 SearchBarComponent(
                     query = searchQuery,
                     onQueryChange = { viewModel.setSearchQuery(it) },
@@ -227,90 +252,82 @@ fun DashboardScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        // Quick Actions Section
+        // Quick Actions Section (Exactly 4 cards in 1 row)
         SectionHeader(
             title = "Quick Actions",
-            modifier = Modifier.padding(horizontal = 20.dp)
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item {
-                QuickActionItemCard(
-                    title = "Add Customer",
-                    icon = Icons.Default.PersonAdd,
-                    iconBgColor = RoyalBlueContainer,
-                    iconTintColor = RoyalBluePrimary,
-                    onClick = onAddCustomer,
-                    testTag = "action_add_customer"
-                )
-            }
+            QuickActionItemCard(
+                title = "Add Client",
+                icon = Icons.Default.PersonAdd,
+                iconBgColor = RoyalBlueContainer,
+                iconTintColor = RoyalBluePrimary,
+                onClick = onAddCustomer,
+                modifier = Modifier.weight(1f),
+                testTag = "action_add_customer"
+            )
 
-            item {
-                QuickActionItemCard(
-                    title = "Add Policy",
-                    icon = Icons.Default.NoteAdd,
-                    iconBgColor = AccentOrangeContainer,
-                    iconTintColor = AccentOrange,
-                    onClick = onAddPolicy,
-                    testTag = "action_add_policy"
-                )
-            }
+            QuickActionItemCard(
+                title = "Add Policy",
+                icon = Icons.Default.NoteAdd,
+                iconBgColor = AccentOrangeContainer,
+                iconTintColor = AccentOrange,
+                onClick = onAddPolicy,
+                modifier = Modifier.weight(1f),
+                testTag = "action_add_policy"
+            )
 
-            item {
-                QuickActionItemCard(
-                    title = "Record Payment",
-                    icon = Icons.Default.Payments,
-                    iconBgColor = EmeraldGreenContainer,
-                    iconTintColor = EmeraldGreenSecondary,
-                    onClick = onNavigateToPayments,
-                    testTag = "action_record_payment"
-                )
-            }
+            QuickActionItemCard(
+                title = "Payment",
+                icon = Icons.Default.Payments,
+                iconBgColor = EmeraldGreenContainer,
+                iconTintColor = EmeraldGreenSecondary,
+                onClick = onNavigateToPayments,
+                modifier = Modifier.weight(1f),
+                testTag = "action_record_payment"
+            )
 
-            item {
-                QuickActionItemCard(
-                    title = "Send Reminder",
-                    icon = Icons.Default.NotificationsActive,
-                    iconBgColor = ErrorRedContainer,
-                    iconTintColor = ErrorRed,
-                    onClick = onNavigateToReminders,
-                    testTag = "action_send_reminder"
-                )
-            }
-
-            item {
-                QuickActionItemCard(
-                    title = "Reports",
-                    icon = Icons.Default.BarChart,
-                    iconBgColor = RoyalBlueContainer,
-                    iconTintColor = OnRoyalBlueContainer,
-                    onClick = onNavigateToReports,
-                    testTag = "action_reports"
-                )
-            }
+            QuickActionItemCard(
+                title = "Reminder",
+                icon = Icons.Default.NotificationsActive,
+                iconBgColor = ErrorRedContainer,
+                iconTintColor = ErrorRed,
+                onClick = onNavigateToReminders,
+                modifier = Modifier.weight(1f),
+                testTag = "action_send_reminder"
+            )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
-        // 6 Key Dashboard Metric Cards Grid
+        // 6 Statistic Cards in a Clean 2-Column Grid
         SectionHeader(
             title = "Dashboard Overview",
-            modifier = Modifier.padding(horizontal = 20.dp)
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             // Row 1: Total Customers & Total Policies
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 DashboardStatCard(
                     title = "Total Customers",
                     value = stats.totalCustomers.toString(),
@@ -322,7 +339,6 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                     testTag = "stat_total_customers"
                 )
-                Spacer(modifier = Modifier.width(12.dp))
                 DashboardStatCard(
                     title = "Total Policies",
                     value = stats.totalPolicies.toString(),
@@ -336,10 +352,11 @@ fun DashboardScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
             // Row 2: Due Today & Due This Month
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 DashboardStatCard(
                     title = "Due Today",
                     value = stats.dueTodayCount.toString(),
@@ -351,7 +368,6 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                     testTag = "stat_due_today"
                 )
-                Spacer(modifier = Modifier.width(12.dp))
                 DashboardStatCard(
                     title = "Due This Month",
                     value = stats.dueThisMonthCount.toString(),
@@ -365,10 +381,11 @@ fun DashboardScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
             // Row 3: Today's Collection & Outstanding Balance
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 DashboardStatCard(
                     title = "Today's Collection",
                     value = "₹${"%.0f".format(stats.premiumCollectedTotal)}",
@@ -380,7 +397,6 @@ fun DashboardScreen(
                     modifier = Modifier.weight(1f),
                     testTag = "stat_collected"
                 )
-                Spacer(modifier = Modifier.width(12.dp))
                 DashboardStatCard(
                     title = "Outstanding Balance",
                     value = "₹${"%.0f".format(stats.outstandingAmount)}",
@@ -395,20 +411,20 @@ fun DashboardScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(18.dp))
 
-        // Today's Work Section with Category Chips
+        // Today's Work Section with Rounded Capsule Tabs
         SectionHeader(
             title = "Today's Work",
-            modifier = Modifier.padding(horizontal = 20.dp)
+            modifier = Modifier.padding(horizontal = 16.dp)
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Filter chips for Today's Work
+        // Modern Rounded Filter Tabs
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             item {
@@ -448,19 +464,27 @@ fun DashboardScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         // Today's Work Dynamic Content List
-        Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             when (activeWorkTab) {
                 TodaysWorkTab.DUE_TODAY -> {
                     if (dueTodayPolicies.isEmpty()) {
                         EmptyWorkStateCard("No premium dues pending for today!")
                     } else {
                         dueTodayPolicies.take(5).forEach { policy ->
+                            val custMobile = remember(customers, policy) {
+                                customers.find { it.id == policy.customerId }?.mobile ?: ""
+                            }
                             WorkPolicyItemCard(
                                 policy = policy,
+                                customerMobile = custMobile,
                                 onCollect = { onCollectPremium(policy) },
+                                onCall = { launchPhoneCall(context, custMobile) },
                                 onRemind = {
                                     val msg = viewModel.generatePremiumReminderMsg(
                                         customerName = policy.customerName,
@@ -469,10 +493,9 @@ fun DashboardScreen(
                                         amount = policy.premiumAmount,
                                         dueDate = policy.dueDate
                                     )
-                                    launchWhatsAppMessage(context, "", msg)
+                                    launchWhatsAppMessage(context, custMobile, msg)
                                 }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -482,9 +505,14 @@ fun DashboardScreen(
                         EmptyWorkStateCard("No lapsed policies requiring follow-up.")
                     } else {
                         followUpPolicies.take(5).forEach { policy ->
+                            val custMobile = remember(customers, policy) {
+                                customers.find { it.id == policy.customerId }?.mobile ?: ""
+                            }
                             WorkPolicyItemCard(
                                 policy = policy,
+                                customerMobile = custMobile,
                                 onCollect = { onCollectPremium(policy) },
+                                onCall = { launchPhoneCall(context, custMobile) },
                                 onRemind = {
                                     val msg = viewModel.generatePremiumReminderMsg(
                                         customerName = policy.customerName,
@@ -493,10 +521,9 @@ fun DashboardScreen(
                                         amount = policy.premiumAmount,
                                         dueDate = policy.dueDate
                                     )
-                                    launchWhatsAppMessage(context, "", msg)
+                                    launchWhatsAppMessage(context, custMobile, msg)
                                 }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -513,7 +540,6 @@ fun DashboardScreen(
                                     launchWhatsAppMessage(context, customer.mobile, msg)
                                 }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -523,12 +549,16 @@ fun DashboardScreen(
                         EmptyWorkStateCard("No maturity policies found in current view.")
                     } else {
                         maturityPolicies.take(5).forEach { policy ->
+                            val custMobile = remember(customers, policy) {
+                                customers.find { it.id == policy.customerId }?.mobile ?: ""
+                            }
                             WorkPolicyItemCard(
                                 policy = policy,
+                                customerMobile = custMobile,
                                 onCollect = { onCollectPremium(policy) },
+                                onCall = { launchPhoneCall(context, custMobile) },
                                 onRemind = { }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
@@ -538,9 +568,14 @@ fun DashboardScreen(
                         EmptyWorkStateCard("No pending collections found.")
                     } else {
                         pendingCollectionPolicies.take(5).forEach { policy ->
+                            val custMobile = remember(customers, policy) {
+                                customers.find { it.id == policy.customerId }?.mobile ?: ""
+                            }
                             WorkPolicyItemCard(
                                 policy = policy,
+                                customerMobile = custMobile,
                                 onCollect = { onCollectPremium(policy) },
+                                onCall = { launchPhoneCall(context, custMobile) },
                                 onRemind = {
                                     val msg = viewModel.generatePremiumReminderMsg(
                                         customerName = policy.customerName,
@@ -549,21 +584,20 @@ fun DashboardScreen(
                                         amount = policy.premiumAmount,
                                         dueDate = policy.dueDate
                                     )
-                                    launchWhatsAppMessage(context, "", msg)
+                                    launchWhatsAppMessage(context, custMobile, msg)
                                 }
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
-// Subcomponents for Dashboard
+// Quick Action Card (Fixed width weight for 1-row layout)
 @Composable
 fun QuickActionItemCard(
     title: String,
@@ -571,27 +605,29 @@ fun QuickActionItemCard(
     iconBgColor: Color,
     iconTintColor: Color,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
     testTag: String = ""
 ) {
     Card(
         onClick = onClick,
-        modifier = Modifier
-            .width(108.dp)
+        modifier = modifier
+            .height(82.dp)
             .testTag(testTag)
-            .shadow(2.dp, RoundedCornerShape(18.dp)),
-        shape = RoundedCornerShape(18.dp),
+            .shadow(1.dp, RoundedCornerShape(14.dp)),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(
             modifier = Modifier
-                .padding(vertical = 14.dp, horizontal = 8.dp)
-                .fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(vertical = 8.dp, horizontal = 2.dp)
+                .fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(iconBgColor),
                 contentAlignment = Alignment.Center
@@ -600,21 +636,22 @@ fun QuickActionItemCard(
                     imageVector = icon,
                     contentDescription = title,
                     tint = iconTintColor,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(18.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Text(
                 text = title,
                 style = MaterialTheme.typography.labelSmall.copy(
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface
                 ),
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -626,32 +663,33 @@ fun WorkTabFilterChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    FilterChip(
-        selected = selected,
+    Surface(
         onClick = onClick,
-        label = {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                )
-            )
-        },
-        shape = RoundedCornerShape(14.dp),
-        colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = RoyalBluePrimary,
-            selectedLabelColor = Color.White,
-            containerColor = MaterialTheme.colorScheme.surface,
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+        shape = RoundedCornerShape(50.dp),
+        color = if (selected) RoyalBluePrimary else MaterialTheme.colorScheme.surface,
+        border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant),
+        shadowElevation = if (selected) 2.dp else 0.dp
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium.copy(
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                fontSize = 12.sp,
+                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+            ),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
         )
-    )
+    }
 }
 
+// Redesigned Customer Policy Card with Photo, Premium, Due Date, Outstanding, Green Collect & Contact Buttons
 @Composable
 fun WorkPolicyItemCard(
     policy: PolicyEntity,
+    customerMobile: String = "",
     onCollect: () -> Unit,
-    onRemind: () -> Unit
+    onRemind: () -> Unit,
+    onCall: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -659,7 +697,8 @@ fun WorkPolicyItemCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // Header Row: Avatar, Name, Policy # & Status Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -681,7 +720,7 @@ fun WorkPolicyItemCard(
                             text = policy.customerName,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
+                                fontSize = 14.sp
                             ),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -689,8 +728,11 @@ fun WorkPolicyItemCard(
                         Text(
                             text = "Pol #: ${policy.policyNumber} • ${policy.planName}",
                             style = MaterialTheme.typography.bodySmall.copy(
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -700,55 +742,140 @@ fun WorkPolicyItemCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Details Row: Premium, Due Date & Outstanding Amount
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
                     Text(
-                        text = "₹${"%.2f".format(policy.premiumAmount)} (${policy.premiumMode})",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                        text = "Premium",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
                         )
                     )
                     Text(
-                        text = "Due: ${policy.dueDate}",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = ErrorRed,
-                            fontWeight = FontWeight.SemiBold
+                        text = "₹${"%.0f".format(policy.premiumAmount)} (${policy.premiumMode})",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = RoyalBluePrimary,
+                            fontSize = 13.sp
                         )
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Due Date",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    )
+                    Text(
+                        text = policy.dueDate,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = ErrorRed,
+                            fontSize = 12.sp
+                        )
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Outstanding",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 10.sp
+                        )
+                    )
+                    Text(
+                        text = "₹${"%.0f".format(policy.premiumAmount)}",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = AccentOrange,
+                            fontSize = 13.sp
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Action Buttons Row: Call, WhatsApp, Green Collect
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Call Button
                     IconButton(
-                        onClick = onRemind,
+                        onClick = onCall,
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(34.dp)
                             .clip(CircleShape)
-                            .background(EmeraldGreenContainer)
+                            .background(RoyalBlueContainer)
+                            .testTag("action_call")
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Send,
-                            contentDescription = "WhatsApp Reminder",
-                            tint = EmeraldGreenSecondary,
-                            modifier = Modifier.size(18.dp)
+                            imageVector = Icons.Default.Phone,
+                            contentDescription = "Call Customer",
+                            tint = RoyalBluePrimary,
+                            modifier = Modifier.size(16.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Button(
-                        onClick = onCollect,
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                    // WhatsApp Button
+                    IconButton(
+                        onClick = onRemind,
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(EmeraldGreenContainer)
+                            .testTag("action_whatsapp")
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.Chat,
+                            contentDescription = "WhatsApp Reminder",
+                            tint = EmeraldGreenSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                // Green Collect Button
+                Button(
+                    onClick = onCollect,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Payments,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Collect",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
                         )
                     }
                 }
@@ -771,7 +898,7 @@ fun WorkBirthdayItemCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -779,20 +906,26 @@ fun WorkBirthdayItemCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                CustomerAvatar(name = customer.name, size = 44.dp)
+                CustomerAvatar(name = customer.name, size = 40.dp)
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 Column {
                     Text(
                         text = customer.name,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        ),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "🎂 DOB: ${customer.dob} | 📱 ${customer.mobile}",
-                        style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp
+                        )
                     )
                 }
             }
@@ -813,11 +946,11 @@ fun EmptyWorkStateCard(message: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
     ) {
         Row(
             modifier = Modifier
-                .padding(20.dp)
+                .padding(16.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -825,13 +958,14 @@ fun EmptyWorkStateCard(message: String) {
                 imageVector = Icons.Default.CheckCircle,
                 contentDescription = null,
                 tint = EmeraldGreenSecondary,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(22.dp)
             )
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Text(
                 text = message,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
