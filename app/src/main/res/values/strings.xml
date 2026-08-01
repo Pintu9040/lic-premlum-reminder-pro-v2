@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">LIC Reminder Pro</string>
+    <string name="google_app_id" translatable="false">1:250618018880:android:a1b2c3d4e5f67890</string>
+    <string name="google_api_key" translatable="false">AIzaSyLicReminderProKey2026SecureBuild</string>
+    <string name="firebase_database_url" translatable="false">https://lic-reminder-pro.firebaseio.com</string>
+    <string name="gcm_defaultSenderId" translatable="false">250618018880</string>
+    <string name="project_id" translatable="false">lic-reminder-pro</string>
+    <string name="google_storage_bucket" translatable="false">lic-reminder-pro.appspot.com</string>
 </resources>
