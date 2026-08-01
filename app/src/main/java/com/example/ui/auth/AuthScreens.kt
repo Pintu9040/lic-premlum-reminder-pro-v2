@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -17,8 +18,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -41,6 +44,7 @@ fun LoginScreen(
     var passwordVisible by remember { mutableStateOf(false) }
 
     val authState by authViewModel.authState.collectAsState()
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Box(
         modifier = Modifier
@@ -50,6 +54,9 @@ fun LoginScreen(
                     colors = listOf(LicNavyPrimary, LicNavySecondary, MaterialTheme.colorScheme.background)
                 )
             )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
     ) {
         Column(
             modifier = Modifier
@@ -59,7 +66,7 @@ fun LoginScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Brand Header Icon
             Box(
@@ -96,11 +103,12 @@ fun LoginScreen(
                 )
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .widthIn(max = 520.dp)
                     .clip(RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
@@ -145,6 +153,7 @@ fun LoginScreen(
                         onValueChange = { email = it },
                         label = { Text("Email Address / Agent ID") },
                         leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("login_email_input"),
@@ -168,7 +177,11 @@ fun LoginScreen(
                             }
                         },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            keyboardController?.hide()
+                            authViewModel.login(email, password)
+                        }),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("login_password_input"),
@@ -190,7 +203,10 @@ fun LoginScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Button(
-                        onClick = { authViewModel.login(email, password) },
+                        onClick = {
+                            keyboardController?.hide()
+                            authViewModel.login(email, password)
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
@@ -249,8 +265,10 @@ fun RegisterScreen(
     var branchName by remember { mutableStateOf("") }
     var mobile by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
 
     val authState by authViewModel.authState.collectAsState()
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Box(
         modifier = Modifier
@@ -260,35 +278,60 @@ fun RegisterScreen(
                     colors = listOf(LicNavyPrimary, LicNavySecondary, MaterialTheme.colorScheme.background)
                 )
             )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp)
+                .padding(horizontal = 20.dp, vertical = 16.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Header Brand Icon
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(LicGoldAccent)
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PersonAdd,
+                    contentDescription = "Register Agent",
+                    tint = LicNavyPrimary,
+                    modifier = Modifier.size(36.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Text(
                 text = "Register LIC Agent",
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontWeight = FontWeight.Bold,
                     color = Color.White
-                )
+                ),
+                textAlign = TextAlign.Center
             )
 
             Text(
                 text = "Create Cloud Account & Agent CRM Portfolio",
-                style = MaterialTheme.typography.bodyMedium.copy(color = LicGoldAccent)
+                style = MaterialTheme.typography.bodyMedium.copy(color = LicGoldAccent),
+                textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .widthIn(max = 520.dp)
                     .clip(RoundedCornerShape(24.dp)),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
@@ -296,7 +339,7 @@ fun RegisterScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(24.dp)
+                        .padding(20.dp)
                 ) {
                     if (authState is AuthState.Error) {
                         Surface(
@@ -320,7 +363,10 @@ fun RegisterScreen(
                         onValueChange = { name = it },
                         label = { Text("Agent Full Name *") },
                         leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().testTag("register_name_input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_name_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -332,7 +378,10 @@ fun RegisterScreen(
                         onValueChange = { email = it },
                         label = { Text("Email Address *") },
                         leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().testTag("register_email_input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_email_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -344,7 +393,10 @@ fun RegisterScreen(
                         onValueChange = { agencyCode = it },
                         label = { Text("Agent ID / Agency Code (e.g. LIC-89421)") },
                         leadingIcon = { Icon(Icons.Default.Badge, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().testTag("register_agency_input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_agency_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -356,7 +408,10 @@ fun RegisterScreen(
                         onValueChange = { branchName = it },
                         label = { Text("Branch Office (e.g. Branch 883 City Center)") },
                         leadingIcon = { Icon(Icons.Default.Store, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().testTag("register_branch_input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_branch_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -368,7 +423,10 @@ fun RegisterScreen(
                         onValueChange = { mobile = it },
                         label = { Text("Mobile Number") },
                         leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth().testTag("register_mobile_input"),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone, imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_mobile_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -380,8 +438,23 @@ fun RegisterScreen(
                         onValueChange = { password = it },
                         label = { Text("Password (Min 6 chars) *") },
                         leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth().testTag("register_password_input"),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = "Toggle Password Visibility"
+                                )
+                            }
+                        },
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            keyboardController?.hide()
+                            authViewModel.register(name, email, agencyCode, branchName, mobile, password)
+                        }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("register_password_input"),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp)
                     )
@@ -389,7 +462,10 @@ fun RegisterScreen(
                     Spacer(modifier = Modifier.height(20.dp))
 
                     Button(
-                        onClick = { authViewModel.register(name, email, agencyCode, branchName, mobile, password) },
+                        onClick = {
+                            keyboardController?.hide()
+                            authViewModel.register(name, email, agencyCode, branchName, mobile, password)
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
@@ -417,6 +493,8 @@ fun RegisterScreen(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(32.dp))
         }
     }
 }
@@ -428,6 +506,7 @@ fun ForgotPasswordScreen(
 ) {
     var email by remember { mutableStateOf("") }
     val successMsg by authViewModel.forgotPasswordSuccess.collectAsState()
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Box(
         modifier = Modifier
@@ -436,86 +515,107 @@ fun ForgotPasswordScreen(
                 Brush.verticalGradient(
                     colors = listOf(LicNavyPrimary, LicNavySecondary, MaterialTheme.colorScheme.background)
                 )
-            ),
+            )
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .imePadding(),
         contentAlignment = Alignment.Center
     ) {
-        Card(
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(24.dp)
-                .clip(RoundedCornerShape(24.dp)),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 520.dp)
+                    .clip(RoundedCornerShape(24.dp)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
-                Icon(
-                    imageVector = Icons.Default.LockReset,
-                    contentDescription = null,
-                    tint = LicNavyPrimary,
-                    modifier = Modifier.size(48.dp)
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    "Reset Password",
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
-                )
-                Text(
-                    "Enter your registered email to receive a password reset link",
-                    style = MaterialTheme.typography.bodyMedium,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                if (successMsg != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    ) {
-                        Text(
-                            text = successMsg!!,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    label = { Text("Registered Email") },
-                    leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                Button(
-                    onClick = { authViewModel.resetPassword(email) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = LicNavyPrimary)
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("Send Password Reset Link")
-                }
+                    Icon(
+                        imageVector = Icons.Default.LockReset,
+                        contentDescription = null,
+                        tint = LicNavyPrimary,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        "Reset Password",
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        "Enter your registered email to receive a password reset link",
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(20.dp))
 
-                TextButton(onClick = {
-                    authViewModel.clearForgotPasswordSuccess()
-                    onNavigateToLogin()
-                }) {
-                    Text("Back to Sign In")
+                    if (successMsg != null) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        ) {
+                            Text(
+                                text = successMsg!!,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        label = { Text("Registered Email") },
+                        leadingIcon = { Icon(Icons.Default.Email, contentDescription = null) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            keyboardController?.hide()
+                            authViewModel.resetPassword(email)
+                        }),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Button(
+                        onClick = {
+                            keyboardController?.hide()
+                            authViewModel.resetPassword(email)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = LicNavyPrimary)
+                    ) {
+                        Text("Send Password Reset Link")
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    TextButton(onClick = {
+                        authViewModel.clearForgotPasswordSuccess()
+                        onNavigateToLogin()
+                    }) {
+                        Text("Back to Sign In")
+                    }
                 }
             }
         }
     }
 }
+

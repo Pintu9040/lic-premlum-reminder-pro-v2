@@ -31,8 +31,19 @@ sealed class AuthState {
 }
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
-    private val auth: FirebaseAuth?
-        get() = try { FirebaseAuth.getInstance() } catch (e: Throwable) { null }
+    private fun getFirebaseAuth(): FirebaseAuth? {
+        return try {
+            if (com.google.firebase.FirebaseApp.getApps(getApplication()).isEmpty()) {
+                Log.w("AuthViewModel", "FirebaseApp not initialized prior to Auth call. Initializing now...")
+                com.google.firebase.FirebaseApp.initializeApp(getApplication())
+            }
+            FirebaseAuth.getInstance()
+        } catch (e: Throwable) {
+            Log.e("AuthViewModel", "Failed to initialize or get FirebaseAuth instance: ${e.localizedMessage}", e)
+            null
+        }
+    }
+
     private val firestore: FirebaseFirestore?
         get() = try { FirebaseFirestore.getInstance() } catch (e: Throwable) { null }
     private val syncManager: FirebaseSyncManager by lazy { FirebaseSyncManager(getApplication()) }
@@ -45,13 +56,14 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     val forgotPasswordSuccess: StateFlow<String?> = _forgotPasswordSuccess.asStateFlow()
 
     init {
-        _authState.value = AuthState.LoggedOut
+        checkExistingSession()
     }
 
     private fun checkExistingSession() {
         viewModelScope.launch {
             try {
-                val user = auth?.currentUser
+                val firebaseAuth = getFirebaseAuth()
+                val user = firebaseAuth?.currentUser
                 if (user != null) {
                     val uid = user.uid
                     val email = user.email ?: ""
@@ -77,7 +89,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     if (name.isBlank()) {
-                        name = email.substringBefore("@").replace(".", " ").capitalize()
+                        name = email.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() }
                     }
 
                     val profile = AgentProfileEntity(
@@ -120,7 +132,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } catch (e: Throwable) {
-                Log.e("AuthViewModel", "Failed to check session", e)
+                Log.e("AuthViewModel", "Failed to check existing session", e)
                 _authState.value = AuthState.LoggedOut
             }
         }
@@ -137,101 +149,77 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _authState.value = AuthState.Loading
-            var firebaseUserLoggedIn = false
-            val currentAuth = auth
 
-            if (currentAuth != null) {
-                try {
-                    val authResult = currentAuth.signInWithEmailAndPassword(trimmedEmail, trimmedPass).await()
-                    val user = authResult.user
-                    if (user != null) {
-                        firebaseUserLoggedIn = true
-                        val uid = user.uid
-                        var name = user.displayName ?: ""
-                        var agencyCode = "LIC-AGENT-89421"
-                        var branchName = "Branch 883"
-                        var mobile = ""
-
-                        // Fetch Agent Profile from Cloud
-                        try {
-                            val fs = firestore
-                            if (fs != null) {
-                                val profileDoc = fs.collection("agents").document(uid).get().await()
-                                if (profileDoc.exists()) {
-                                    name = profileDoc.getString("agentName") ?: name
-                                    agencyCode = profileDoc.getString("agencyCode") ?: agencyCode
-                                    branchName = profileDoc.getString("branchName") ?: branchName
-                                    mobile = profileDoc.getString("mobile") ?: mobile
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("AuthViewModel", "Error reading profile during login", e)
-                        }
-
-                        if (name.isBlank()) {
-                            name = trimmedEmail.substringBefore("@").replace(".", " ").capitalize()
-                        }
-
-                        val profile = AgentProfileEntity(
-                            id = 1,
-                            agentName = name,
-                            agencyCode = agencyCode,
-                            branchName = branchName,
-                            email = trimmedEmail,
-                            mobile = mobile
-                        )
-                        db.agentDao().saveAgentProfile(profile)
-
-                        _authState.value = AuthState.LoggedIn(
-                            uid = uid,
-                            email = trimmedEmail,
-                            name = name,
-                            agencyCode = agencyCode,
-                            branchName = branchName,
-                            mobile = mobile
-                        )
-
-                        launch {
-                            syncManager.autoRestoreAndSync(uid, db)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w("AuthViewModel", "Firebase sign in exception: ${e.localizedMessage}")
-                }
+            val firebaseAuth = getFirebaseAuth()
+            if (firebaseAuth == null) {
+                val errorMsg = "Firebase Authentication is unavailable on this device. Verify internet connection."
+                Log.e("AuthViewModel", "Login failed: FirebaseAuth instance is null")
+                _authState.value = AuthState.Error(errorMsg)
+                return@launch
             }
 
-            if (!firebaseUserLoggedIn) {
-                // Fallback local sign-in / profile sync so authentication is always functional
-                try {
-                    val existingProfile = db.agentDao().getAgentProfileSync()
-                    val agentName = existingProfile?.agentName?.ifBlank { null }
-                        ?: trimmedEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() }
-                    val agencyCode = existingProfile?.agencyCode?.ifBlank { null } ?: "LIC-AGENT-89421"
-                    val branchName = existingProfile?.branchName?.ifBlank { null } ?: "Branch Office"
-                    val mobile = existingProfile?.mobile ?: ""
+            try {
+                Log.d("AuthViewModel", "Attempting Firebase signInWithEmailAndPassword for $trimmedEmail")
+                val authResult = firebaseAuth.signInWithEmailAndPassword(trimmedEmail, trimmedPass).await()
+                val user = authResult.user
+                if (user != null) {
+                    val uid = user.uid
+                    var name = user.displayName ?: ""
+                    var agencyCode = "LIC-AGENT-89421"
+                    var branchName = "Branch 883"
+                    var mobile = ""
 
-                    val localProfile = AgentProfileEntity(
+                    // Fetch Agent Profile from Cloud
+                    try {
+                        val fs = firestore
+                        if (fs != null) {
+                            val profileDoc = fs.collection("agents").document(uid).get().await()
+                            if (profileDoc.exists()) {
+                                name = profileDoc.getString("agentName") ?: name
+                                agencyCode = profileDoc.getString("agencyCode") ?: agencyCode
+                                branchName = profileDoc.getString("branchName") ?: branchName
+                                mobile = profileDoc.getString("mobile") ?: mobile
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AuthViewModel", "Error reading profile during login", e)
+                    }
+
+                    if (name.isBlank()) {
+                        name = trimmedEmail.substringBefore("@").replace(".", " ").replaceFirstChar { it.uppercase() }
+                    }
+
+                    val profile = AgentProfileEntity(
                         id = 1,
-                        agentName = agentName,
+                        agentName = name,
                         agencyCode = agencyCode,
                         branchName = branchName,
                         email = trimmedEmail,
                         mobile = mobile
                     )
-                    db.agentDao().saveAgentProfile(localProfile)
+                    db.agentDao().saveAgentProfile(profile)
 
                     _authState.value = AuthState.LoggedIn(
-                        uid = "agent_" + trimmedEmail.hashCode(),
+                        uid = uid,
                         email = trimmedEmail,
-                        name = agentName,
+                        name = name,
                         agencyCode = agencyCode,
                         branchName = branchName,
                         mobile = mobile
                     )
-                } catch (e: Exception) {
-                    Log.e("AuthViewModel", "Local login error", e)
-                    _authState.value = AuthState.Error(e.localizedMessage ?: "Login failed. Please retry.")
+
+                    launch {
+                        syncManager.autoRestoreAndSync(uid, db)
+                    }
+                } else {
+                    val errorMsg = "Authentication failed: Empty user account returned."
+                    Log.e("AuthViewModel", "Login error: $errorMsg")
+                    _authState.value = AuthState.Error(errorMsg)
                 }
+            } catch (e: Exception) {
+                val errorMsg = e.localizedMessage ?: e.message ?: "Firebase authentication failed (${e.javaClass.simpleName})"
+                Log.e("AuthViewModel", "Firebase sign-in exception: $errorMsg", e)
+                _authState.value = AuthState.Error(errorMsg)
             }
         }
     }
@@ -252,14 +240,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         val trimmedPass = pass.trim()
 
         if (trimmedName.isBlank() || trimmedEmail.isBlank() || trimmedPass.length < 6) {
-            _authState.value = AuthState.Error("Please fill out all fields. Password must be at least 6 characters.")
+            _authState.value = AuthState.Error("Please fill out all required fields. Password must be at least 6 characters.")
             return
         }
 
         viewModelScope.launch {
             _authState.value = AuthState.Loading
-            var registeredInFirebase = false
-            val currentAuth = auth
+
+            val firebaseAuth = getFirebaseAuth()
+            if (firebaseAuth == null) {
+                val errorMsg = "Firebase Authentication is unavailable on this device. Verify internet connection."
+                Log.e("AuthViewModel", "Registration failed: FirebaseAuth instance is null")
+                _authState.value = AuthState.Error(errorMsg)
+                return@launch
+            }
 
             val profile = AgentProfileEntity(
                 id = 1,
@@ -270,59 +264,44 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 mobile = trimmedMobile
             )
 
-            if (currentAuth != null) {
-                try {
-                    val result = currentAuth.createUserWithEmailAndPassword(trimmedEmail, trimmedPass).await()
-                    val user = result.user
-                    if (user != null) {
-                        registeredInFirebase = true
-                        val uid = user.uid
+            try {
+                Log.d("AuthViewModel", "Attempting Firebase createUserWithEmailAndPassword for $trimmedEmail")
+                val result = firebaseAuth.createUserWithEmailAndPassword(trimmedEmail, trimmedPass).await()
+                val user = result.user
+                if (user != null) {
+                    val uid = user.uid
 
-                        try {
-                            user.updateProfile(
-                                UserProfileChangeRequest.Builder()
-                                    .setDisplayName(trimmedName)
-                                    .build()
-                            ).await()
-                        } catch (e: Exception) {
-                            Log.w("AuthViewModel", "Could not set auth display name: ${e.localizedMessage}")
-                        }
-
-                        db.agentDao().saveAgentProfile(profile)
-                        syncManager.backupAgentProfile(uid, profile)
-                        syncManager.initialBackupAll(uid, db)
-
-                        _authState.value = AuthState.LoggedIn(
-                            uid = uid,
-                            email = trimmedEmail,
-                            name = trimmedName,
-                            agencyCode = profile.agencyCode,
-                            branchName = profile.branchName,
-                            mobile = profile.mobile
-                        )
+                    try {
+                        user.updateProfile(
+                            UserProfileChangeRequest.Builder()
+                                .setDisplayName(trimmedName)
+                                .build()
+                        ).await()
+                    } catch (e: Exception) {
+                        Log.w("AuthViewModel", "Could not set auth display name: ${e.localizedMessage}")
                     }
-                } catch (e: Exception) {
-                    Log.w("AuthViewModel", "Firebase register exception: ${e.localizedMessage}")
-                }
-            }
 
-            if (!registeredInFirebase) {
-                // Register locally in Room DB
-                try {
                     db.agentDao().saveAgentProfile(profile)
+                    syncManager.backupAgentProfile(uid, profile)
+                    syncManager.initialBackupAll(uid, db)
 
                     _authState.value = AuthState.LoggedIn(
-                        uid = "agent_" + System.currentTimeMillis(),
+                        uid = uid,
                         email = trimmedEmail,
                         name = trimmedName,
                         agencyCode = profile.agencyCode,
                         branchName = profile.branchName,
                         mobile = profile.mobile
                     )
-                } catch (e: Exception) {
-                    Log.e("AuthViewModel", "Local registration error", e)
-                    _authState.value = AuthState.Error(e.localizedMessage ?: "Registration failed")
+                } else {
+                    val errorMsg = "Registration failed: Empty user account returned."
+                    Log.e("AuthViewModel", "Registration error: $errorMsg")
+                    _authState.value = AuthState.Error(errorMsg)
                 }
+            } catch (e: Exception) {
+                val errorMsg = e.localizedMessage ?: e.message ?: "Firebase registration failed (${e.javaClass.simpleName})"
+                Log.e("AuthViewModel", "Firebase registration exception: $errorMsg", e)
+                _authState.value = AuthState.Error(errorMsg)
             }
         }
     }
@@ -335,12 +314,20 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            try {
-                auth?.sendPasswordResetEmail(trimmedEmail)?.await()
-            } catch (e: Exception) {
-                Log.w("AuthViewModel", "Reset password request info: ${e.localizedMessage}")
+            val firebaseAuth = getFirebaseAuth()
+            if (firebaseAuth == null) {
+                _authState.value = AuthState.Error("Firebase Authentication service is unavailable on this device.")
+                return@launch
             }
-            _forgotPasswordSuccess.value = "Password reset email sent to $trimmedEmail. Please check your inbox."
+
+            try {
+                firebaseAuth.sendPasswordResetEmail(trimmedEmail).await()
+                _forgotPasswordSuccess.value = "Password reset email sent to $trimmedEmail. Please check your inbox."
+            } catch (e: Exception) {
+                val errorMsg = e.localizedMessage ?: e.message ?: "Failed to send reset email"
+                Log.e("AuthViewModel", "Reset password request failed: $errorMsg", e)
+                _authState.value = AuthState.Error(errorMsg)
+            }
         }
     }
 
@@ -351,7 +338,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         viewModelScope.launch {
             try {
-                auth?.signOut()
+                getFirebaseAuth()?.signOut()
             } catch (e: Exception) {
                 Log.e("AuthViewModel", "Logout error", e)
             }

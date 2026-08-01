@@ -19,11 +19,13 @@ class LicApplication : Application() {
                 if (app == null) {
                     initFirebaseWithOptions()
                 } else {
-                    Log.i("LicApplication", "FirebaseApp initialized via default resources")
+                    Log.i("LicApplication", "FirebaseApp initialized successfully via default resources (google-services.json)")
                 }
+            } else {
+                Log.i("LicApplication", "FirebaseApp already initialized (${FirebaseApp.getApps(this).size} app(s))")
             }
         } catch (e: Throwable) {
-            Log.w("LicApplication", "Default FirebaseApp init failed: ${e.localizedMessage}. Trying explicit options.")
+            Log.e("LicApplication", "Default FirebaseApp initialization failed: ${e.localizedMessage}. Attempting initialization with explicit options.", e)
             initFirebaseWithOptions()
         }
     }
@@ -38,10 +40,11 @@ class LicApplication : Application() {
                     .setStorageBucket("lic-reminder-pro.appspot.com")
                     .build()
                 FirebaseApp.initializeApp(this, options)
-                Log.i("LicApplication", "FirebaseApp initialized via explicit FirebaseOptions")
+                Log.i("LicApplication", "FirebaseApp successfully initialized via explicit FirebaseOptions")
             }
         } catch (e: Throwable) {
-            Log.e("LicApplication", "Critical error initializing Firebase options: ${e.localizedMessage}")
+            Log.e("LicApplication", "CRITICAL ERROR: Failed to initialize Firebase with explicit options: ${e.localizedMessage}", e)
         }
     }
 }
+
