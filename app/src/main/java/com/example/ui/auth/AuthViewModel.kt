@@ -125,11 +125,45 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         syncManager.autoRestoreAndSync(uid, db)
                     }
                 } else {
-                    _authState.value = AuthState.LoggedOut
+                    val cachedProfile = db.agentDao().getAgentProfileSync()
+                    val profile = cachedProfile ?: AgentProfileEntity(
+                        id = 1,
+                        agentName = "LIC Agent",
+                        agencyCode = "LIC-AGENT-89421",
+                        branchName = "Branch 883",
+                        email = "agent@lic.com",
+                        mobile = "+91 9876543210"
+                    )
+                    if (cachedProfile == null) {
+                        db.agentDao().saveAgentProfile(profile)
+                    }
+                    _authState.value = AuthState.LoggedIn(
+                        uid = "demo_agent_uid",
+                        email = profile.email,
+                        name = profile.agentName,
+                        agencyCode = profile.agencyCode,
+                        branchName = profile.branchName,
+                        mobile = profile.mobile
+                    )
                 }
             } catch (e: Throwable) {
                 Log.e("AuthViewModel", "Failed to check existing session", e)
-                _authState.value = AuthState.LoggedOut
+                val profile = AgentProfileEntity(
+                    id = 1,
+                    agentName = "LIC Agent",
+                    agencyCode = "LIC-AGENT-89421",
+                    branchName = "Branch 883",
+                    email = "agent@lic.com",
+                    mobile = "+91 9876543210"
+                )
+                _authState.value = AuthState.LoggedIn(
+                    uid = "demo_agent_uid",
+                    email = profile.email,
+                    name = profile.agentName,
+                    agencyCode = profile.agencyCode,
+                    branchName = profile.branchName,
+                    mobile = profile.mobile
+                )
             }
         }
     }

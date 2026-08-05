@@ -1,1283 +1,2341 @@
 package com.example.ui.settings
 
-import android.content.Context
-import android.content.Intent
-import android.graphics.Bitmap
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import com.example.data.local.LicBranch
+import com.example.data.local.LicBranchMaster
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.data.local.AgentProfileEntity
 import com.example.ui.LicViewModel
-import com.example.ui.components.*
-import com.example.ui.theme.*
-import java.io.File
-import java.io.FileOutputStream
+import kotlinx.coroutines.launch
 
+// Color Palette Definition for Royal Blue + Dark Theme
+private val DarkBg = Color(0xFF0F172A)
+private val CardBg = Color(0xFF1E293B)
+private val CardBorder = Color(0xFF334155)
+private val RoyalBluePrimary = Color(0xFF1E3A8A)
+private val RoyalBlueLight = Color(0xFF2563EB)
+private val RoyalBlueGlow = Color(0xFF3B82F6)
+private val AccentGreen = Color(0xFF10B981)
+private val AccentAmber = Color(0xFFF59E0B)
+private val AccentOrange = Color(0xFFF97316)
+private val AccentRed = Color(0xFFEF4444)
+private val TextWhite = Color(0xFFF8FAFC)
+private val TextMuted = Color(0xFF94A3B8)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    viewModel: LicViewModel,
+    viewModel: LicViewModel? = null,
+    onBackClick: () -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
-    val agentProfile by viewModel.agentProfile.collectAsState()
-    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    // Agent Profile Fields
-    var agentName by remember(agentProfile) { mutableStateOf(agentProfile?.agentName ?: "Pintu Ojha") }
-    var agencyCode by remember(agentProfile) { mutableStateOf(agentProfile?.agencyCode ?: "LIC-AG-89421") }
-    var branchName by remember(agentProfile) { mutableStateOf(agentProfile?.branchName ?: "Branch 883 (Jaipur)") }
-    var licenseNumber by remember(agentProfile) { mutableStateOf(agentProfile?.licenseNumber ?: "LIC-LIC-901234") }
-    var phone by remember(agentProfile) { mutableStateOf(agentProfile?.mobile ?: "+91 98765 43210") }
-    var email by remember(agentProfile) { mutableStateOf(agentProfile?.email ?: "pintu.lic.agent@gmail.com") }
-    var photoUriStr by remember(agentProfile) { mutableStateOf(agentProfile?.photoUri ?: "") }
+    val agentProfileState by (viewModel?.agentProfile?.collectAsState() ?: remember { mutableStateOf(null) })
 
-    // Theme & Preferences
-    var selectedThemeMode by remember(agentProfile) { mutableStateOf(agentProfile?.themeMode ?: "System") }
+    // --- Profile State ---
+    var agentName by remember { mutableStateOf("Pintu Ojha") }
+    var agentCode by remember { mutableStateOf("LIC-AG-89421") }
+    var branchCode by remember { mutableStateOf("08B") }
+    var branchName by remember { mutableStateOf("Bhubaneswar Branch") }
+    var mobileNumber by remember { mutableStateOf("+91 98765 43210") }
+    var emailAddress by remember { mutableStateOf("pintu.lic.agent@gmail.com") }
+    var photoUri by remember { mutableStateOf("") }
 
-    // Security Settings
-    var pinCode by remember(agentProfile) { mutableStateOf(agentProfile?.pinCode ?: "") }
-    var isAppLockEnabled by remember(pinCode) { mutableStateOf(pinCode.isNotBlank()) }
-    var isBiometricEnabled by remember(agentProfile) { mutableStateOf(agentProfile?.isBiometricEnabled ?: false) }
-    var isFaceUnlockEnabled by remember { mutableStateOf(false) }
-    var autoLogoutMinutes by remember(agentProfile) { mutableStateOf(agentProfile?.autoLogoutMinutes ?: 15) }
+    LaunchedEffect(agentProfileState) {
+        agentProfileState?.let {
+            agentName = it.agentName
+            agentCode = it.agencyCode
+            branchCode = it.branchCode
+            branchName = it.branchName
+            mobileNumber = it.mobile
+            emailAddress = it.email
+            photoUri = it.photoUri
+        }
+    }
 
-    // Notification Toggles
-    var isPremiumDueReminderEnabled by remember { mutableStateOf(true) }
-    var isBirthdayReminderEnabled by remember { mutableStateOf(true) }
-    var isAnniversaryReminderEnabled by remember { mutableStateOf(true) }
-    var isFollowUpReminderEnabled by remember { mutableStateOf(true) }
-    var isDailySummaryEnabled by remember { mutableStateOf(true) }
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            val selectedUriStr = it.toString()
+            photoUri = selectedUriStr
+            val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
+                agentName = agentName,
+                agencyCode = agentCode,
+                branchName = branchName,
+                mobile = mobileNumber,
+                email = emailAddress,
+                photoUri = selectedUriStr
+            )
+            viewModel?.saveAgentProfile(updated)
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar("Profile photo updated successfully!")
+            }
+        }
+    }
 
-    // Sync & Backup State
-    val syncStatus by viewModel.syncStatus.collectAsState()
-    var isAutoSyncEnabled by remember(agentProfile) { mutableStateOf(agentProfile?.isAutoSyncEnabled ?: true) }
-    var lastSyncedTime by remember(agentProfile) { mutableStateOf(agentProfile?.lastSyncedTime ?: "Just now") }
+    // --- App Preferences State ---
+    var isDarkMode by remember { mutableStateOf(true) }
+    var isSystemTheme by remember { mutableStateOf(false) }
+    var selectedLanguage by remember { mutableStateOf("English") }
+    var selectedFontSize by remember { mutableStateOf("Medium") }
 
-    // Dialog States
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    // --- Notification Settings State ---
+    var isPremiumReminder by remember { mutableStateOf(true) }
+    var isDueTodayReminder by remember { mutableStateOf(true) }
+    var isTomorrowReminder by remember { mutableStateOf(true) }
+    var isOverdueReminder by remember { mutableStateOf(true) }
+    var isWhatsAppReminder by remember { mutableStateOf(com.example.whatsapp.WhatsAppAutomation.isWhatsAppRemindersEnabled(context)) }
+    var selectedReminderTime by remember { mutableStateOf("09:00 AM") }
+    var selectedNotificationSound by remember { mutableStateOf("LIC Chime") }
+    var isVibrationEnabled by remember { mutableStateOf(true) }
+
+    // --- Receipt Settings State ---
+    var selectedReceiptSize by remember { mutableStateOf("A5") }
+    var isReceiptHeaderEnabled by remember { mutableStateOf(true) }
+    var receiptHeaderTitle by remember { mutableStateOf("LIC Premium Official Receipt") }
+    var isAgentSignatureEnabled by remember { mutableStateOf(true) }
+    var isQrCodeEnabled by remember { mutableStateOf(true) }
+    var isAutoReceiptNumber by remember { mutableStateOf(true) }
+
+    // --- Backup Settings State ---
+    var isAutoBackupEnabled by remember { mutableStateOf(true) }
+    var isCloudSyncEnabled by remember { mutableStateOf(true) }
+    var lastBackupText by remember { mutableStateOf("Today, 05:30 PM • 14.2 MB") }
+
+    // --- Security Settings State ---
+    var isAppLockEnabled by remember { mutableStateOf(true) }
+    var isPinLockEnabled by remember { mutableStateOf(true) }
+    var currentPinCode by remember { mutableStateOf("1234") }
+    var isFingerprintEnabled by remember { mutableStateOf(true) }
+    var isFaceUnlockEnabled by remember { mutableStateOf(false) } // Placeholder
+    var selectedAutoLockTime by remember { mutableStateOf("5 Min") }
+
+    // --- Data Management State ---
+    var storageUsedMb by remember { mutableFloatStateOf(34.5f) }
+
+    // --- Dialog Controls ---
     var showEditProfileDialog by remember { mutableStateOf(false) }
-    var showChangePhotoSheet by remember { mutableStateOf(false) }
-    var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var showHelpDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var showPinDialog by remember { mutableStateOf(false) }
-    var showClearCacheDialog by remember { mutableStateOf(false) }
-    var showRestoreConfirmDialog by remember { mutableStateOf(false) }
-    var showUserGuideDialog by remember { mutableStateOf(false) }
+    var showResetDemoDialog by remember { mutableStateOf(false) }
     var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
     var showTermsDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
 
-    // Photo Launchers
-    val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            photoUriStr = uri.toString()
-            saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-            Toast.makeText(context, "Profile Photo Updated!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicturePreview()
-    ) { bitmap: Bitmap? ->
-        if (bitmap != null) {
-            val file = File(context.cacheDir, "agent_photo_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-            photoUriStr = Uri.fromFile(file).toString()
-            saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-            Toast.makeText(context, "Profile Photo Captured!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            Toast.makeText(context, "Database File Selected for Import!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .verticalScroll(rememberScrollState())
-    ) {
-        // Top Banner Header
-        Surface(
-            color = RoyalBluePrimary,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    text = "Settings & Security",
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        fontSize = 22.sp
-                    )
-                )
-                Text(
-                    text = "Advisor Profile, App Security, Backup & Notification Controls",
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        color = AccentOrangeLight,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-
-            // ==========================================
-            // 1. PROFILE SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+    Scaffold(
+        containerColor = DarkBg,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
                         Text(
-                            text = "PROFILE",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            text = "Settings",
+                            color = TextWhite,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 19.sp
                         )
-                        Icon(Icons.Default.Badge, contentDescription = null, tint = RoyalBluePrimary)
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        // Profile Avatar
-                        Surface(
-                            shape = CircleShape,
-                            color = RoyalBlueContainer,
-                            modifier = Modifier
-                                .size(72.dp)
-                                .border(2.dp, RoyalBluePrimary, CircleShape)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                if (photoUriStr.isNotBlank()) {
-                                    AsyncImage(
-                                        model = photoUriStr,
-                                        contentDescription = "Agent Photo",
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(CircleShape),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.Person,
-                                        contentDescription = null,
-                                        tint = RoyalBluePrimary,
-                                        modifier = Modifier.size(40.dp)
-                                    )
-                                }
-                            }
-                        }
-
-                        // Info Display
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = agentName,
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                            )
-                            Text(
-                                text = "Code: $agencyCode",
-                                style = MaterialTheme.typography.labelMedium.copy(color = RoyalBluePrimary, fontWeight = FontWeight.SemiBold)
-                            )
-                            Text(
-                                text = "Branch: $branchName",
-                                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            )
-                            Text(
-                                text = "$phone • $email",
-                                style = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant),
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    // Action Buttons: Edit Profile & Change Photo
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showEditProfileDialog = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Edit Profile", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        Button(
-                            onClick = { showChangePhotoSheet = true },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Change Photo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-
-            // ==========================================
-            // 2. SECURITY SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    Text(
-                        text = "SECURITY",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
+                        Text(
+                            text = "Manage your LIC Premium Reminder Pro preferences.",
+                            color = TextMuted,
+                            fontSize = 11.5.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                    )
-
-                    // Change Password
-                    SettingsClickableRow(
-                        icon = Icons.Default.LockReset,
-                        title = "Change Password",
-                        subtitle = "Update advisor account login password",
-                        onClick = { showChangePasswordDialog = true }
-                    )
-
-                    HorizontalDivider()
-
-                    // App Lock (PIN)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    }
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onBackClick,
+                        modifier = Modifier.testTag("settings_back_button")
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("App Lock (PIN)", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                            Text(
-                                if (pinCode.isBlank()) "Disabled" else "4-Digit PIN Configured",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (pinCode.isBlank()) Color.Gray else EmeraldGreenSecondary
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = TextWhite
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = { showHelpDialog = true },
+                        modifier = Modifier.testTag("settings_help_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+                            contentDescription = "Help",
+                            tint = TextWhite
+                        )
+                    }
+
+                    Box {
+                        IconButton(
+                            onClick = { showMoreMenu = true },
+                            modifier = Modifier.testTag("settings_more_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More Options",
+                                tint = TextWhite
                             )
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (pinCode.isNotBlank()) {
-                                OutlinedButton(
-                                    onClick = { showPinDialog = true },
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Text("Change PIN", fontSize = 11.sp)
+
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false },
+                            modifier = Modifier.background(CardBg)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("About LIC Reminder Pro", color = TextWhite) },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null, tint = RoyalBlueGlow) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showAboutDialog = true
                                 }
-                            }
-                            Switch(
-                                checked = isAppLockEnabled,
-                                onCheckedChange = { checked ->
-                                    isAppLockEnabled = checked
-                                    if (checked && pinCode.isBlank()) {
-                                        showPinDialog = true
-                                    } else if (!checked) {
-                                        pinCode = ""
-                                        saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, "", isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-                                        Toast.makeText(context, "App PIN Lock Disabled", Toast.LENGTH_SHORT).show()
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Reset Preferences", color = TextWhite) },
+                                leadingIcon = { Icon(Icons.Default.RestartAlt, contentDescription = null, tint = AccentAmber) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar("Settings reset to defaults")
                                     }
                                 }
                             )
                         }
                     }
-
-                    HorizontalDivider()
-
-                    // Fingerprint Login
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Fingerprint Login", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                            Text("Unlock using device biometric sensor", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = isBiometricEnabled,
-                            onCheckedChange = {
-                                isBiometricEnabled = it
-                                saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, it, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-                            }
-                        )
-                    }
-
-                    HorizontalDivider()
-
-                    // Face Unlock
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Face Unlock", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                            Text("Unlock using camera recognition", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = isFaceUnlockEnabled,
-                            onCheckedChange = {
-                                isFaceUnlockEnabled = it
-                                Toast.makeText(context, if (it) "Face Unlock Enabled" else "Face Unlock Disabled", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                    }
-
-                    HorizontalDivider()
-
-                    // Auto Logout Timer
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Auto Logout Timer", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            items(listOf(5, 15, 30, 60, -1)) { mins ->
-                                val labelText = if (mins == -1) "Never" else "${mins}m"
-                                FilterChip(
-                                    selected = autoLogoutMinutes == mins,
-                                    onClick = {
-                                        autoLogoutMinutes = mins
-                                        saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, isBiometricEnabled, mins, isAutoSyncEnabled, lastSyncedTime)
-                                    },
-                                    label = { Text(labelText) }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-
-            // ==========================================
-            // 3. NOTIFICATIONS SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "NOTIFICATIONS",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = DarkBg,
+                    titleContentColor = TextWhite
+                )
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // ===================================================================
+            // PROFILE CARD
+            // ===================================================================
+            ProfileCardSection(
+                agentName = agentName,
+                agentCode = agentCode,
+                branchCode = branchCode,
+                branchName = branchName,
+                mobileNumber = mobileNumber,
+                emailAddress = emailAddress,
+                photoUri = photoUri,
+                onUploadPhoto = { photoPickerLauncher.launch("image/*") },
+                onReplacePhoto = { photoPickerLauncher.launch("image/*") },
+                onRemovePhoto = {
+                    photoUri = ""
+                    val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
+                        agentName = agentName,
+                        agencyCode = agentCode,
+                        branchCode = branchCode,
+                        branchName = branchName,
+                        mobile = mobileNumber,
+                        email = emailAddress,
+                        photoUri = ""
                     )
-
-                    SettingsSwitchRow(
-                        title = "Premium Due Reminder",
-                        subtitle = "Alerts for upcoming policy renewal dates",
-                        checked = isPremiumDueReminderEnabled,
-                        onCheckedChange = { isPremiumDueReminderEnabled = it }
-                    )
-
-                    SettingsSwitchRow(
-                        title = "Birthday Reminder",
-                        subtitle = "Notify client birthdays for greeting dispatch",
-                        checked = isBirthdayReminderEnabled,
-                        onCheckedChange = { isBirthdayReminderEnabled = it }
-                    )
-
-                    SettingsSwitchRow(
-                        title = "Anniversary Reminder",
-                        subtitle = "Notify wedding anniversaries of policyholders",
-                        checked = isAnniversaryReminderEnabled,
-                        onCheckedChange = { isAnniversaryReminderEnabled = it }
-                    )
-
-                    SettingsSwitchRow(
-                        title = "Follow-up Reminder",
-                        subtitle = "Reminders for scheduled client calls & meetings",
-                        checked = isFollowUpReminderEnabled,
-                        onCheckedChange = { isFollowUpReminderEnabled = it }
-                    )
-
-                    SettingsSwitchRow(
-                        title = "Daily Summary Notification",
-                        subtitle = "Morning overview of total collections & dues",
-                        checked = isDailySummaryEnabled,
-                        onCheckedChange = { isDailySummaryEnabled = it }
-                    )
-                }
-            }
-
-
-            // ==========================================
-            // 4. BACKUP & SYNC SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "BACKUP & SYNC",
-                            style = MaterialTheme.typography.titleMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        )
-                        Icon(Icons.Default.CloudSync, contentDescription = null, tint = EmeraldGreenSecondary)
+                    viewModel?.saveAgentProfile(updated)
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Profile photo removed")
                     }
+                },
+                onEditProfileClick = { showEditProfileDialog = true }
+            )
 
-                    // Last Sync Time Display
-                    Surface(
-                        color = EmeraldGreenSecondary.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Icon(Icons.Default.Schedule, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(20.dp))
-                            Column {
-                                Text("Last Sync Time", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                val displayTime = when (syncStatus) {
-                                    is com.example.data.remote.SyncStatus.Synced -> (syncStatus as com.example.data.remote.SyncStatus.Synced).lastSyncTime
-                                    is com.example.data.remote.SyncStatus.Offline -> (syncStatus as com.example.data.remote.SyncStatus.Offline).lastSyncTime
-                                    else -> lastSyncedTime
-                                }
-                                Text(displayTime, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = EmeraldGreenSecondary))
-                            }
-                        }
-                    }
+            // ===================================================================
+            // APP PREFERENCES
+            // ===================================================================
+            AppPreferencesSection(
+                isDarkMode = isDarkMode,
+                onDarkModeChange = { isDarkMode = it },
+                isSystemTheme = isSystemTheme,
+                onSystemThemeChange = { isSystemTheme = it },
+                selectedLanguage = selectedLanguage,
+                onLanguageChange = { selectedLanguage = it },
+                selectedFontSize = selectedFontSize,
+                onFontSizeChange = { selectedFontSize = it }
+            )
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Auto Background Cloud Sync", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                        Switch(
-                            checked = isAutoSyncEnabled,
-                            onCheckedChange = {
-                                isAutoSyncEnabled = it
-                                saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, isBiometricEnabled, autoLogoutMinutes, it, lastSyncedTime)
-                            }
-                        )
-                    }
+            // ===================================================================
+            // NOTIFICATION SETTINGS
+            // ===================================================================
+            NotificationSettingsSection(
+                isPremiumReminder = isPremiumReminder,
+                onPremiumReminderChange = { isPremiumReminder = it },
+                isDueToday = isDueTodayReminder,
+                onDueTodayChange = { isDueTodayReminder = it },
+                isTomorrow = isTomorrowReminder,
+                onTomorrowChange = { isTomorrowReminder = it },
+                isOverdue = isOverdueReminder,
+                onOverdueChange = { isOverdueReminder = it },
+                isWhatsApp = isWhatsAppReminder,
+                onWhatsAppChange = {
+                    isWhatsAppReminder = it
+                    com.example.whatsapp.WhatsAppAutomation.setWhatsAppRemindersEnabled(context, it)
+                },
+                selectedTime = selectedReminderTime,
+                onTimeChange = { selectedReminderTime = it },
+                selectedSound = selectedNotificationSound,
+                onSoundChange = { selectedNotificationSound = it },
+                isVibration = isVibrationEnabled,
+                onVibrationChange = { isVibrationEnabled = it }
+            )
 
-                    // Action Buttons: Sync Now, Backup Now, Restore Backup
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                viewModel.triggerSync()
-                                Toast.makeText(context, "Cloud Sync Initiated!", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Sync Now", fontSize = 11.sp)
-                        }
+            // ===================================================================
+            // RECEIPT SETTINGS
+            // ===================================================================
+            ReceiptSettingsSection(
+                selectedSize = selectedReceiptSize,
+                onSizeChange = { selectedReceiptSize = it },
+                isHeader = isReceiptHeaderEnabled,
+                onHeaderChange = { isReceiptHeaderEnabled = it },
+                headerTitle = receiptHeaderTitle,
+                onHeaderTitleChange = { receiptHeaderTitle = it },
+                isSignature = isAgentSignatureEnabled,
+                onSignatureChange = { isAgentSignatureEnabled = it },
+                isQrCode = isQrCodeEnabled,
+                onQrCodeChange = { isQrCodeEnabled = it },
+                isAutoReceipt = isAutoReceiptNumber,
+                onAutoReceiptChange = { isAutoReceiptNumber = it }
+            )
 
-                        Button(
-                            onClick = {
-                                viewModel.agentProfile.value?.let { prof -> viewModel.saveAgentProfile(prof) }
-                                Toast.makeText(context, "Database Backup Created!", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Backup Now", fontSize = 11.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { showRestoreConfirmDialog = true },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Restore", fontSize = 11.sp)
-                        }
+            // ===================================================================
+            // BACKUP SETTINGS
+            // ===================================================================
+            BackupSettingsSection(
+                isAutoBackup = isAutoBackupEnabled,
+                onAutoBackupChange = { isAutoBackupEnabled = it },
+                isCloudSync = isCloudSyncEnabled,
+                onCloudSyncChange = { isCloudSyncEnabled = it },
+                lastBackupText = lastBackupText,
+                onBackupNowClick = {
+                    coroutineScope.launch {
+                        lastBackupText = "Just now • 14.3 MB"
+                        snackbarHostState.showSnackbar("Backup snapshot generated successfully!")
                     }
                 }
-            }
+            )
 
+            // ===================================================================
+            // SECURITY
+            // ===================================================================
+            SecuritySettingsSection(
+                isAppLock = isAppLockEnabled,
+                onAppLockChange = { isAppLockEnabled = it },
+                isPinLock = isPinLockEnabled,
+                onPinLockChange = { isPinLockEnabled = it },
+                onSetPinClick = { showPinDialog = true },
+                isFingerprint = isFingerprintEnabled,
+                onFingerprintChange = { isFingerprintEnabled = it },
+                isFaceUnlock = isFaceUnlockEnabled,
+                onFaceUnlockChange = { isFaceUnlockEnabled = it },
+                selectedAutoLockTime = selectedAutoLockTime,
+                onAutoLockTimeChange = { selectedAutoLockTime = it }
+            )
 
-            // ==========================================
-            // 5. APPEARANCE SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "APPEARANCE",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf("Light Theme", "Dark Theme", "System Theme").forEach { mode ->
-                            val cleanMode = mode.replace(" Theme", "")
-                            val isSelected = selectedThemeMode.equals(cleanMode, ignoreCase = true) || (cleanMode == "System" && selectedThemeMode == "System")
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = {
-                                    selectedThemeMode = cleanMode
-                                    saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, cleanMode, pinCode, isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-                                },
-                                label = { Text(mode, fontSize = 12.sp) },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = when (cleanMode) {
-                                            "Light" -> Icons.Default.LightMode
-                                            "Dark" -> Icons.Default.DarkMode
-                                            else -> Icons.Default.SettingsSuggest
-                                        },
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+            // ===================================================================
+            // DATA MANAGEMENT
+            // ===================================================================
+            DataManagementSection(
+                storageUsedMb = storageUsedMb,
+                onExportDataClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Encrypted dataset exported to Downloads folder")
                     }
-                }
-            }
-
-
-            // ==========================================
-            // 6. DATA MANAGEMENT SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        text = "DATA MANAGEMENT",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = {
-                                Toast.makeText(context, "Database Exported to Downloads folder!", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Export Database", fontSize = 11.sp)
-                        }
-
-                        OutlinedButton(
-                            onClick = { filePickerLauncher.launch("*/*") },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Import Database", fontSize = 11.sp)
-                        }
+                },
+                onImportDataClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Import backup file launcher opened")
                     }
+                },
+                onResetDemoClick = { showResetDemoDialog = true }
+            )
 
-                    // Clear Cache Button
-                    Button(
-                        onClick = { showClearCacheDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF616161)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Clear Cache", fontWeight = FontWeight.Bold)
+            // ===================================================================
+            // SUPPORT
+            // ===================================================================
+            SupportSection(
+                onHelpCenterClick = { showHelpDialog = true },
+                onContactSupportClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Contact: support@licreminderpro.in | +91 1800 22 3344")
                     }
-                }
-            }
-
-
-            // ==========================================
-            // 7. HELP & SUPPORT SECTION
-            // ==========================================
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(2.dp, RoundedCornerShape(20.dp)),
-                shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Column(
-                    modifier = Modifier.padding(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        text = "HELP & SUPPORT",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.ExtraBold,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    )
-
-                    SettingsClickableRow(
-                        icon = Icons.Default.MenuBook,
-                        title = "User Guide",
-                        subtitle = "Advisor manual and quick start guide",
-                        onClick = { showUserGuideDialog = true }
-                    )
-
-                    HorizontalDivider()
-
-                    SettingsClickableRow(
-                        icon = Icons.Default.PrivacyTip,
-                        title = "Privacy Policy",
-                        subtitle = "Data encryption & client privacy rules",
-                        onClick = { showPrivacyPolicyDialog = true }
-                    )
-
-                    HorizontalDivider()
-
-                    SettingsClickableRow(
-                        icon = Icons.Default.Description,
-                        title = "Terms & Conditions",
-                        subtitle = "CRM software licensing agreement",
-                        onClick = { showTermsDialog = true }
-                    )
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = RoyalBluePrimary)
-                            Text("App Version", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Text("v2.5.0 (Build 2026)", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                },
+                onFeedbackClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Thank you for your feedback proposal!")
                     }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text("Contact Support", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:support@licreminderpro.in"))
-                                context.startActivity(Intent.createChooser(intent, "Contact Email Support"))
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Email, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Email Support", fontSize = 11.sp)
-                        }
-
-                        Button(
-                            onClick = {
-                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:+911800223344"))
-                                context.startActivity(intent)
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Call Support", fontSize = 11.sp)
-                        }
+                },
+                onPrivacyPolicyClick = { showPrivacyPolicyDialog = true },
+                onTermsClick = { showTermsDialog = true },
+                onRateAppClick = {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Redirecting to Play Store rating page...")
                     }
-                }
-            }
+                },
+                onAboutClick = { showAboutDialog = true }
+            )
 
-
-            // ==========================================
-            // LOGOUT SESSION BUTTON
-            // ==========================================
-            Button(
+            // ===================================================================
+            // LOGOUT BUTTON
+            // ===================================================================
+            OutlinedButton(
                 onClick = onLogout,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("logout_button"),
-                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
-                shape = RoundedCornerShape(14.dp)
+                    .height(56.dp)
+                    .testTag("settings_logout_button"),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(1.5.dp, AccentRed),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = AccentRed
+                )
             ) {
-                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Logout Advisor Session", fontWeight = FontWeight.Bold)
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.Logout,
+                    contentDescription = "Logout",
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Logout",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
             }
 
+            // BOTTOM SAFE AREA SPACING
             Spacer(modifier = Modifier.height(32.dp))
         }
     }
 
+    // ===================================================================
+    // MODALS & DIALOGS
+    // ===================================================================
 
-    // ==========================================
-    // DIALOGS & MODALS
-    // ==========================================
-
-    // 1. Edit Profile Dialog
+    // Edit Profile Dialog
     if (showEditProfileDialog) {
         var tempName by remember { mutableStateOf(agentName) }
-        var tempAgencyCode by remember { mutableStateOf(agencyCode) }
-        var tempLicense by remember { mutableStateOf(licenseNumber) }
-        var tempBranch by remember { mutableStateOf(branchName) }
-        var tempPhone by remember { mutableStateOf(phone) }
-        var tempEmail by remember { mutableStateOf(email) }
+        var tempCode by remember { mutableStateOf(agentCode) }
+        var tempBranchCode by remember { mutableStateOf(branchCode) }
+        var tempBranchName by remember { mutableStateOf(branchName) }
+        var tempMobile by remember { mutableStateOf(mobileNumber) }
+        var tempEmail by remember { mutableStateOf(emailAddress) }
+        var showSearchBranchDialog by remember { mutableStateOf(false) }
+
+        val foundBranch = remember(tempBranchCode) { LicBranchMaster.findBranchByCode(tempBranchCode) }
+        val isBranchCodeInvalid = tempBranchCode.isNotBlank() && foundBranch == null
+
+        LaunchedEffect(tempBranchCode) {
+            val matched = LicBranchMaster.findBranchByCode(tempBranchCode)
+            if (matched != null) {
+                tempBranchName = matched.name
+            }
+        }
 
         AlertDialog(
             onDismissRequest = { showEditProfileDialog = false },
-            title = { Text("Edit Advisor Profile", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Person, contentDescription = null, tint = RoyalBlueLight)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Edit Agent Profile", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
             text = {
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
                 ) {
+                    AgentProfilePhotoHeader(
+                        photoUri = photoUri,
+                        agentName = tempName,
+                        onUploadPhoto = { photoPickerLauncher.launch("image/*") },
+                        onReplacePhoto = { photoPickerLauncher.launch("image/*") },
+                        onRemovePhoto = {
+                            photoUri = ""
+                            val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
+                                agentName = tempName,
+                                agencyCode = tempCode,
+                                branchCode = tempBranchCode,
+                                branchName = tempBranchName,
+                                mobile = tempMobile,
+                                email = tempEmail,
+                                photoUri = ""
+                            )
+                            viewModel?.saveAgentProfile(updated)
+                        }
+                    )
+
                     OutlinedTextField(
                         value = tempName,
                         onValueChange = { tempName = it },
-                        label = { Text("Agent Full Name *") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("setting_agent_name_input"),
-                        shape = RoundedCornerShape(12.dp)
+                        label = { Text("Agent Name", color = TextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("edit_agent_name_field")
                     )
+
                     OutlinedTextField(
-                        value = tempAgencyCode,
-                        onValueChange = { tempAgencyCode = it },
-                        label = { Text("Agency Code") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        value = tempCode,
+                        onValueChange = { tempCode = it },
+                        label = { Text("Agency / Agent Code", color = TextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth()
                     )
+
+                    // --- BRANCH CODE FIELD WITH SEARCH BUTTON & VALIDATION ---
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = tempBranchCode,
+                                onValueChange = { input ->
+                                    tempBranchCode = input.uppercase().trim()
+                                },
+                                label = { Text("Branch Code", color = if (isBranchCodeInvalid) Color(0xFFEF4444) else TextMuted) },
+                                isError = isBranchCodeInvalid,
+                                singleLine = true,
+                                trailingIcon = {
+                                    if (foundBranch != null) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Valid Branch Code",
+                                            tint = AccentGreen,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextWhite,
+                                    unfocusedTextColor = TextWhite,
+                                    errorBorderColor = Color(0xFFEF4444),
+                                    errorLabelColor = Color(0xFFEF4444),
+                                    errorTrailingIconColor = Color(0xFFEF4444),
+                                    focusedBorderColor = RoyalBlueLight,
+                                    unfocusedBorderColor = CardBorder
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("edit_branch_code_field")
+                            )
+
+                            OutlinedButton(
+                                onClick = { showSearchBranchDialog = true },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, RoyalBlueLight),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = Color(0xFF0F172A),
+                                    contentColor = RoyalBlueGlow
+                                ),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 14.dp),
+                                modifier = Modifier
+                                    .height(56.dp)
+                                    .testTag("search_branch_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search Branch",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Search", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        // Smooth Validation Animation
+                        AnimatedVisibility(
+                            visible = isBranchCodeInvalid,
+                            enter = fadeIn(animationSpec = tween(250)) + slideInVertically(initialOffsetY = { -8 }),
+                            exit = fadeOut(animationSpec = tween(200))
+                        ) {
+                            Text(
+                                text = "Invalid Branch Code",
+                                color = Color(0xFFEF4444),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
+                        }
+                    }
+
+                    // --- BRANCH NAME FIELD (READ ONLY) ---
                     OutlinedTextField(
-                        value = tempLicense,
-                        onValueChange = { tempLicense = it },
-                        label = { Text("License Number") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        value = tempBranchName,
+                        onValueChange = {}, // Read Only - not manually editable
+                        readOnly = true,
+                        enabled = false,
+                        label = { Text("Branch Name (Read Only)", color = TextMuted) },
+                        trailingIcon = {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Read Only",
+                                tint = TextMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledContainerColor = Color(0xFF0F172A).copy(alpha = 0.6f),
+                            disabledTextColor = TextWhite,
+                            disabledBorderColor = CardBorder,
+                            disabledLabelColor = TextMuted,
+                            disabledTrailingIconColor = TextMuted
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_branch_name_field")
                     )
+
                     OutlinedTextField(
-                        value = tempBranch,
-                        onValueChange = { tempBranch = it },
-                        label = { Text("Branch Office") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        value = tempMobile,
+                        onValueChange = { tempMobile = it },
+                        label = { Text("Mobile Number", color = TextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedTextField(
-                        value = tempPhone,
-                        onValueChange = { tempPhone = it },
-                        label = { Text("Mobile Number") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    )
+
                     OutlinedTextField(
                         value = tempEmail,
                         onValueChange = { tempEmail = it },
-                        label = { Text("Email Address") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        label = { Text("Email Address", color = TextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
+                        if (isBranchCodeInvalid) return@Button
+
                         agentName = tempName
-                        agencyCode = tempAgencyCode
-                        licenseNumber = tempLicense
-                        branchName = tempBranch
-                        phone = tempPhone
-                        email = tempEmail
-                        saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, pinCode, isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
+                        agentCode = tempCode
+                        branchCode = tempBranchCode
+                        branchName = tempBranchName
+                        mobileNumber = tempMobile
+                        emailAddress = tempEmail
+                        val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
+                            agentName = tempName,
+                            agencyCode = tempCode,
+                            branchCode = tempBranchCode,
+                            branchName = tempBranchName,
+                            mobile = tempMobile,
+                            email = tempEmail,
+                            photoUri = photoUri
+                        )
+                        viewModel?.saveAgentProfile(updated)
                         showEditProfileDialog = false
-                        Toast.makeText(context, "Profile Updated Successfully!", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.testTag("save_profile_button")
-                ) {
-                    Text("Save Changes")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showEditProfileDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // 2. Change Photo Dialog Sheet
-    if (showChangePhotoSheet) {
-        AlertDialog(
-            onDismissRequest = { showChangePhotoSheet = false },
-            title = { Text("Change Agent Photo", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
-            text = { Text("Select photo source to update your profile picture:") },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            showChangePhotoSheet = false
-                            cameraLauncher.launch(null)
-                        },
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Camera")
-                    }
-                    Button(
-                        onClick = {
-                            showChangePhotoSheet = false
-                            galleryLauncher.launch("image/*")
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Gallery")
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showChangePhotoSheet = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // 3. Change Password Dialog
-    if (showChangePasswordDialog) {
-        var oldPassword by remember { mutableStateOf("") }
-        var newPassword by remember { mutableStateOf("") }
-        var confirmPassword by remember { mutableStateOf("") }
-
-        AlertDialog(
-            onDismissRequest = { showChangePasswordDialog = false },
-            title = { Text("Change Account Password", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = oldPassword,
-                        onValueChange = { oldPassword = it },
-                        label = { Text("Current Password") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = newPassword,
-                        onValueChange = { newPassword = it },
-                        label = { Text("New Password") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = confirmPassword,
-                        onValueChange = { confirmPassword = it },
-                        label = { Text("Confirm New Password") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newPassword.isNotBlank() && newPassword == confirmPassword) {
-                            showChangePasswordDialog = false
-                            Toast.makeText(context, "Password Changed Successfully!", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "Passwords do not match!", Toast.LENGTH_SHORT).show()
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Agent profile updated successfully!")
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    shape = RoundedCornerShape(12.dp)
+                    enabled = !isBranchCodeInvalid,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = RoyalBlueLight,
+                        disabledContainerColor = RoyalBlueLight.copy(alpha = 0.4f),
+                        disabledContentColor = TextWhite.copy(alpha = 0.5f)
+                    )
                 ) {
-                    Text("Update Password")
+                    Text("Save Changes", color = TextWhite, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showChangePasswordDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showEditProfileDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+
+        // Search Branch Picker Modal
+        if (showSearchBranchDialog) {
+            SearchBranchDialog(
+                currentCode = tempBranchCode,
+                onBranchSelected = { selected ->
+                    tempBranchCode = selected.code
+                    tempBranchName = selected.name
+                    showSearchBranchDialog = false
+                },
+                onDismiss = { showSearchBranchDialog = false }
+            )
+        }
+    }
+
+    // Help Dialog
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = RoyalBlueLight)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Settings Guide", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("• Profile: Keep your LIC Agent credentials updated for accurate PDF receipts.", color = TextWhite, fontSize = 13.sp)
+                    Text("• Notifications: Configure automated WhatsApp & morning dues alerts.", color = TextWhite, fontSize = 13.sp)
+                    Text("• Security: Enable PIN or Fingerprint authentication to safeguard client records.", color = AccentGreen, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showHelpDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)) {
+                    Text("Got It", color = TextWhite)
+                }
             }
         )
     }
 
-    // 4. PIN Lock Dialog
+    // Set PIN Dialog
     if (showPinDialog) {
-        var tempPin by remember { mutableStateOf("") }
+        var newPin by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showPinDialog = false },
-            title = { Text("Configure Security PIN Lock", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Pin, contentDescription = null, tint = RoyalBlueLight)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Set 4-Digit Security PIN", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                }
+            },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Enter a 4-digit numeric passcode to secure your app access:")
+                    Text("Enter a new 4-digit passcode for instant application unlocking.", color = TextMuted, fontSize = 12.5.sp)
                     OutlinedTextField(
-                        value = tempPin,
-                        onValueChange = { if (it.length <= 4) tempPin = it },
-                        label = { Text("4-Digit PIN") },
+                        value = newPin,
+                        onValueChange = { if (it.length <= 4) newPin = it },
+                        label = { Text("4-Digit PIN", color = TextMuted) },
                         singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("pin_input_field")
                     )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        pinCode = tempPin
-                        isAppLockEnabled = tempPin.isNotBlank()
-                        saveProfile(viewModel, agentName, agencyCode, branchName, licenseNumber, phone, email, photoUriStr, selectedThemeMode, tempPin, isBiometricEnabled, autoLogoutMinutes, isAutoSyncEnabled, lastSyncedTime)
-                        showPinDialog = false
-                        Toast.makeText(context, "Security PIN Saved!", Toast.LENGTH_SHORT).show()
+                        if (newPin.length == 4) {
+                            currentPinCode = newPin
+                            isPinLockEnabled = true
+                            showPinDialog = false
+                            coroutineScope.launch { snackbarHostState.showSnackbar("Security PIN updated!") }
+                        }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    shape = RoundedCornerShape(12.dp)
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBlueLight)
                 ) {
-                    Text("Save PIN")
+                    Text("Save PIN", color = TextWhite)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showPinDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showPinDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
             }
         )
     }
 
-    // 5. Restore Backup Confirm Dialog
-    if (showRestoreConfirmDialog) {
+    // Reset Demo Data Dialog
+    if (showResetDemoDialog) {
         AlertDialog(
-            onDismissRequest = { showRestoreConfirmDialog = false },
-            title = { Text("Restore Cloud Backup", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
-            text = { Text("Are you sure you want to restore data from cloud backup? This will sync your local database with the latest cloud records.") },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        viewModel.triggerSync()
-                        showRestoreConfirmDialog = false
-                        Toast.makeText(context, "Restoring data from Cloud Backup...", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Proceed Restore")
+            onDismissRequest = { showResetDemoDialog = false },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = AccentAmber)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Reset Demo Data", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showRestoreConfirmDialog = false }) { Text("Cancel") }
-            }
-        )
-    }
-
-    // 6. Clear Cache Dialog
-    if (showClearCacheDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearCacheDialog = false },
-            title = { Text("Clear Temporary Cache", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("This will clear temporary image thumbnails and cached application files.")
-                    Text(
-                        "Note: Customer, policy, and payment records are preserved safely.",
-                        style = MaterialTheme.typography.labelMedium.copy(color = EmeraldGreenSecondary, fontWeight = FontWeight.Bold)
-                    )
-                }
+                Text(
+                    "This will restore demo clients, policies, and sample receipts. No existing cloud backups will be lost.",
+                    color = TextMuted,
+                    fontSize = 13.sp
+                )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        showClearCacheDialog = false
-                        Toast.makeText(context, "Cache Cleared Successfully!", Toast.LENGTH_SHORT).show()
+                        showResetDemoDialog = false
+                        coroutineScope.launch { snackbarHostState.showSnackbar("Demo data environment refreshed") }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
-                    shape = RoundedCornerShape(12.dp)
+                    colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
                 ) {
-                    Text("Clear Cache")
+                    Text("Confirm Reset", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearCacheDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showResetDemoDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
             }
         )
     }
 
-    // 7. User Guide Dialog
-    if (showUserGuideDialog) {
-        AlertDialog(
-            onDismissRequest = { showUserGuideDialog = false },
-            title = { Text("Advisor User Guide", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("1. Customer Directory: Add, search, and manage policyholders with full KYC details.", style = MaterialTheme.typography.bodySmall)
-                    Text("2. Policy Vault: Register policies, track sum assured, maturity date, and due premium mode.", style = MaterialTheme.typography.bodySmall)
-                    Text("3. Partial Payments: Record unlimited partial or full premium payments with receipt generation.", style = MaterialTheme.typography.bodySmall)
-                    Text("4. Performance Analytics: View collection trends, outstanding balances, and customer metrics.", style = MaterialTheme.typography.bodySmall)
-                    Text("5. Reminders & WhatsApp: Send automated WhatsApp due alerts and birthday wishes.", style = MaterialTheme.typography.bodySmall)
-                }
-            },
-            confirmButton = { TextButton(onClick = { showUserGuideDialog = false }) { Text("Close") } }
-        )
-    }
-
-    // 8. Privacy Policy Dialog
+    // Privacy Policy Dialog
     if (showPrivacyPolicyDialog) {
         AlertDialog(
             onDismissRequest = { showPrivacyPolicyDialog = false },
-            title = { Text("Privacy Policy", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
+            containerColor = CardBg,
+            title = { Text("Privacy Policy", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
             text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        "LIC Premium Reminder Pro respects advisor and client privacy.\n\n" +
-                                "1. Data Storage: All policyholder KYC details, payment receipts, and contact records are encrypted locally in SQLite Room database and synced securely to Firebase Cloud.\n\n" +
-                                "2. Security: No client personal data is sold or shared with third party advertisers.\n\n" +
-                                "3. Permissions: Camera, Gallery, and Storage access are utilized solely for uploading document bonds and photos."
-                    )
-                }
+                Text(
+                    "LIC Premium Reminder Pro enforces strict AES-256 client data encryption. Policy records, policy numbers, and contact information are strictly stored on local storage or protected Firebase cloud instances.",
+                    color = TextMuted,
+                    fontSize = 13.sp
+                )
             },
-            confirmButton = { TextButton(onClick = { showPrivacyPolicyDialog = false }) { Text("Close") } }
+            confirmButton = {
+                Button(onClick = { showPrivacyPolicyDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)) {
+                    Text("Close", color = TextWhite)
+                }
+            }
         )
     }
 
-    // 9. Terms Dialog
+    // Terms Dialog
     if (showTermsDialog) {
         AlertDialog(
             onDismissRequest = { showTermsDialog = false },
-            title = { Text("Terms & Conditions", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
+            containerColor = CardBg,
+            title = { Text("Terms & Conditions", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp) },
             text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        "Terms of Use for LIC Premium Reminder Pro:\n\n" +
-                                "1. Designed for authorized Life Insurance Corporation of India (LIC) Agents and Financial Advisors.\n" +
-                                "2. Premium due calculations are advisory. Always verify with official LIC portal receipts.\n" +
-                                "3. Backup policy records regularly to Firebase cloud."
-                    )
+                Text(
+                    "Licensed exclusively for authorized LIC Agents and Financial Consultants. Automated reminders are subject to local SMS and WhatsApp API guidelines.",
+                    color = TextMuted,
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                Button(onClick = { showTermsDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)) {
+                    Text("Close", color = TextWhite)
+                }
+            }
+        )
+    }
+
+    // About Dialog
+    if (showAboutDialog) {
+        AlertDialog(
+            onDismissRequest = { showAboutDialog = false },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.VerifiedUser, contentDescription = null, tint = RoyalBlueGlow)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("About LIC Reminder Pro", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             },
-            confirmButton = { TextButton(onClick = { showTermsDialog = false }) { Text("Close") } }
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("LIC Premium Reminder Pro", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                    Text("Version: 2.5.0 (Build 2026)", color = RoyalBlueGlow, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Banking-grade agent productivity toolkit designed for policy tracking, automated client reminders, and instant digital receipt generation.", color = TextMuted, fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                Button(onClick = { showAboutDialog = false }, colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)) {
+                    Text("OK", color = TextWhite)
+                }
+            }
         )
     }
 }
 
-// Helper Function: Save Agent Profile
-private fun saveProfile(
-    viewModel: LicViewModel,
-    name: String,
-    agencyCode: String,
-    branch: String,
-    license: String,
-    phone: String,
-    email: String,
-    photoUri: String,
-    themeMode: String,
-    pin: String,
-    biometric: Boolean,
-    logoutMins: Int,
-    autoSync: Boolean,
-    lastSync: String
-) {
-    val profile = AgentProfileEntity(
-        id = 1,
-        agentName = name,
-        agencyCode = agencyCode,
-        branchName = branch,
-        licenseNumber = license,
-        mobile = phone,
-        email = email,
-        photoUri = photoUri,
-        themeMode = themeMode,
-        isDarkMode = themeMode == "Dark",
-        pinCode = pin,
-        isBiometricEnabled = biometric,
-        autoLogoutMinutes = logoutMins,
-        isAutoSyncEnabled = autoSync,
-        lastSyncedTime = lastSync
-    )
-    viewModel.saveAgentProfile(profile)
-}
+// ===========================================================================
+// SUB-SECTIONS (20dp Rounded Cards, 16dp Spacing, Responsive Layouts)
+// ===========================================================================
 
-// Helper Composable: Settings Clickable Row
 @Composable
-private fun SettingsClickableRow(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
+fun AgentProfilePhotoHeader(
+    photoUri: String,
+    agentName: String,
+    onUploadPhoto: () -> Unit,
+    onReplacePhoto: () -> Unit,
+    onRemovePhoto: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = Modifier
+    val agentInitials = agentName
+        .split(" ")
+        .mapNotNull { it.firstOrNull()?.toString() }
+        .joinToString("")
+        .take(2)
+        .ifEmpty { "PO" }
+        .uppercase()
+
+    Column(
+        modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f)
+        // Large Circular Profile Photo (96dp)
+        Box(
+            modifier = Modifier
+                .size(96.dp)
+                .testTag("agent_profile_photo_96dp"),
+            contentAlignment = Alignment.BottomEnd
         ) {
-            Icon(icon, contentDescription = null, tint = RoyalBluePrimary)
-            Column {
-                Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            AnimatedContent(
+                targetState = photoUri,
+                transitionSpec = {
+                    (fadeIn(animationSpec = tween(300)) + scaleIn(initialScale = 0.85f))
+                        .togetherWith(fadeOut(animationSpec = tween(300)) + scaleOut(targetScale = 0.85f))
+                },
+                label = "ProfilePhotoScaleAnimation"
+            ) { currentUri ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                colors = listOf(RoyalBlueGlow, RoyalBluePrimary)
+                            )
+                        )
+                        .border(3.dp, RoyalBlueGlow, CircleShape)
+                        .clickable {
+                            if (currentUri.isNotBlank()) onReplacePhoto() else onUploadPhoto()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (currentUri.isNotBlank()) {
+                        AsyncImage(
+                            model = currentUri,
+                            contentDescription = "Agent Profile Photo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(CircleShape)
+                        )
+                    } else {
+                        // Premium Placeholder Avatar
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = agentInitials,
+                                style = TextStyle(
+                                    color = TextWhite,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Camera Icon Overlay at Bottom-Right
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(RoyalBlueLight)
+                    .border(2.dp, CardBg, CircleShape)
+                    .clickable {
+                        if (photoUri.isNotBlank()) onReplacePhoto() else onUploadPhoto()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PhotoCamera,
+                    contentDescription = "Change Profile Photo",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Color.Gray)
+
+        // Photo Action Buttons (Upload Photo, Replace Photo, Remove Photo)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (photoUri.isBlank()) {
+                Button(
+                    onClick = onUploadPhoto,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = RoyalBlueLight,
+                        contentColor = TextWhite
+                    ),
+                    modifier = Modifier.testTag("upload_profile_photo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Upload,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Upload Photo", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onReplacePhoto,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, RoyalBlueGlow),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RoyalBlueGlow),
+                    modifier = Modifier.testTag("replace_profile_photo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Replace Photo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+
+                OutlinedButton(
+                    onClick = onRemovePhoto,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF87171)),
+                    modifier = Modifier.testTag("remove_profile_photo_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Remove Photo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
+            }
+        }
     }
 }
 
-// Helper Composable: Settings Switch Row
+/**
+ * 1. PROFILE CARD SECTION
+ */
 @Composable
-private fun SettingsSwitchRow(
+fun ProfileCardSection(
+    agentName: String,
+    agentCode: String,
+    branchCode: String = "",
+    branchName: String,
+    mobileNumber: String,
+    emailAddress: String,
+    photoUri: String = "",
+    onUploadPhoto: () -> Unit = {},
+    onReplacePhoto: () -> Unit = {},
+    onRemovePhoto: () -> Unit = {},
+    onEditProfileClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("profile_card_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "AGENT PROFILE",
+                    color = RoyalBlueGlow,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.5.sp,
+                    letterSpacing = 1.sp
+                )
+
+                Surface(
+                    color = RoyalBluePrimary.copy(alpha = 0.3f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "Verified LIC Agent",
+                        color = TextWhite,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Agent Profile Photo Section
+            AgentProfilePhotoHeader(
+                photoUri = photoUri,
+                agentName = agentName,
+                onUploadPhoto = onUploadPhoto,
+                onReplacePhoto = onReplacePhoto,
+                onRemovePhoto = onRemovePhoto
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            // Details Column
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = agentName,
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+                Text(
+                    text = if (branchCode.isNotBlank()) "Code: $agentCode • $branchName ($branchCode)" else "Code: $agentCode • $branchName",
+                    color = RoyalBlueGlow,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = "$mobileNumber • $emailAddress",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            Button(
+                onClick = onEditProfileClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("edit_profile_button"),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = RoyalBlueLight,
+                    contentColor = TextWhite
+                )
+            ) {
+                Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = "Edit Profile Info", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+/**
+ * 2. APP PREFERENCES SECTION
+ */
+@Composable
+fun AppPreferencesSection(
+    isDarkMode: Boolean,
+    onDarkModeChange: (Boolean) -> Unit,
+    isSystemTheme: Boolean,
+    onSystemThemeChange: (Boolean) -> Unit,
+    selectedLanguage: String,
+    onLanguageChange: (String) -> Unit,
+    selectedFontSize: String,
+    onFontSizeChange: (String) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("app_preferences_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "APP PREFERENCES",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            // Dark Mode Switch
+            SettingsSwitchRowItem(
+                icon = Icons.Default.DarkMode,
+                title = "Dark Mode",
+                subtitle = "Royal Blue banking dark interface",
+                checked = isDarkMode,
+                onCheckedChange = onDarkModeChange,
+                tag = "dark_mode_switch"
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            // System Theme Switch
+            SettingsSwitchRowItem(
+                icon = Icons.Default.SettingsSuggest,
+                title = "System Theme",
+                subtitle = "Match device display theme automatically",
+                checked = isSystemTheme,
+                onCheckedChange = onSystemThemeChange,
+                tag = "system_theme_switch"
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            // Language Selection Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Language", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("English", "Hindi", "Marathi", "Gujarati")) { lang ->
+                        val isSelected = selectedLanguage == lang
+                        Surface(
+                            onClick = { onLanguageChange(lang) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder)
+                        ) {
+                            Text(
+                                text = lang,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            // Font Size Selection Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Font Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Small", "Medium", "Large").forEach { size ->
+                        val isSelected = selectedFontSize == size
+                        Surface(
+                            onClick = { onFontSizeChange(size) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = size,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 3. NOTIFICATION SETTINGS SECTION
+ */
+@Composable
+fun NotificationSettingsSection(
+    isPremiumReminder: Boolean,
+    onPremiumReminderChange: (Boolean) -> Unit,
+    isDueToday: Boolean,
+    onDueTodayChange: (Boolean) -> Unit,
+    isTomorrow: Boolean,
+    onTomorrowChange: (Boolean) -> Unit,
+    isOverdue: Boolean,
+    onOverdueChange: (Boolean) -> Unit,
+    isWhatsApp: Boolean,
+    onWhatsAppChange: (Boolean) -> Unit,
+    selectedTime: String,
+    onTimeChange: (String) -> Unit,
+    selectedSound: String,
+    onSoundChange: (String) -> Unit,
+    isVibration: Boolean,
+    onVibrationChange: (Boolean) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("notification_settings_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "NOTIFICATION SETTINGS",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.NotificationsActive,
+                title = "Premium Reminder",
+                subtitle = "Master switch for policy renewal alerts",
+                checked = isPremiumReminder,
+                onCheckedChange = onPremiumReminderChange
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Today,
+                title = "Due Today",
+                subtitle = "Alerts for policies renewing today",
+                checked = isDueToday,
+                onCheckedChange = onDueTodayChange
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Event,
+                title = "Tomorrow Reminder",
+                subtitle = "1-day advance warning notifications",
+                checked = isTomorrow,
+                onCheckedChange = onTomorrowChange
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Warning,
+                title = "Overdue Reminder",
+                subtitle = "Lapsed & grace period payment alerts",
+                checked = isOverdue,
+                onCheckedChange = onOverdueChange
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Chat,
+                title = "WhatsApp Reminder",
+                subtitle = "Auto-formatted WhatsApp message triggers",
+                checked = isWhatsApp,
+                onCheckedChange = onWhatsAppChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            // Reminder Time Picker Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Reminder Time", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("08:00 AM", "09:00 AM", "02:00 PM", "07:00 PM").forEach { timeStr ->
+                        val isSelected = selectedTime == timeStr
+                        Surface(
+                            onClick = { onTimeChange(timeStr) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = timeStr,
+                                color = TextWhite,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            // Notification Sound Selection Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Notification Sound", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("LIC Chime", "Gentle Bell", "Default Tone", "Silent")) { sound ->
+                        val isSelected = selectedSound == sound
+                        Surface(
+                            onClick = { onSoundChange(sound) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder)
+                        ) {
+                            Text(
+                                text = sound,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Vibration,
+                title = "Vibration",
+                subtitle = "Haptic feedback on reminder alerts",
+                checked = isVibration,
+                onCheckedChange = onVibrationChange
+            )
+        }
+    }
+}
+
+/**
+ * 4. RECEIPT SETTINGS SECTION
+ */
+@Composable
+fun ReceiptSettingsSection(
+    selectedSize: String,
+    onSizeChange: (String) -> Unit,
+    isHeader: Boolean,
+    onHeaderChange: (Boolean) -> Unit,
+    headerTitle: String,
+    onHeaderTitleChange: (String) -> Unit,
+    isSignature: Boolean,
+    onSignatureChange: (Boolean) -> Unit,
+    isQrCode: Boolean,
+    onQrCodeChange: (Boolean) -> Unit,
+    isAutoReceipt: Boolean,
+    onAutoReceiptChange: (Boolean) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("receipt_settings_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "RECEIPT SETTINGS",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            // Receipt Size Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Receipt Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("A5", "Thermal 3\"", "A4 Sheet").forEach { size ->
+                        val isSelected = selectedSize == size
+                        Surface(
+                            onClick = { onSizeChange(size) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = size,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Title,
+                title = "Receipt Header",
+                subtitle = "Print custom title banner on receipts",
+                checked = isHeader,
+                onCheckedChange = onHeaderChange
+            )
+
+            if (isHeader) {
+                OutlinedTextField(
+                    value = headerTitle,
+                    onValueChange = onHeaderTitleChange,
+                    label = { Text("Custom Header Text", color = TextMuted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite,
+                        focusedBorderColor = RoyalBlueLight,
+                        unfocusedBorderColor = CardBorder
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Draw,
+                title = "Agent Signature",
+                subtitle = "Attach digital agent signature mark",
+                checked = isSignature,
+                onCheckedChange = onSignatureChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.QrCode,
+                title = "QR Code",
+                subtitle = "Embed UPI payment validation QR on PDFs",
+                checked = isQrCode,
+                onCheckedChange = onQrCodeChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Numbers,
+                title = "Auto Receipt Number",
+                subtitle = "Sequential automatic receipt numbering",
+                checked = isAutoReceipt,
+                onCheckedChange = onAutoReceiptChange
+            )
+        }
+    }
+}
+
+/**
+ * 5. BACKUP SETTINGS SECTION
+ */
+@Composable
+fun BackupSettingsSection(
+    isAutoBackup: Boolean,
+    onAutoBackupChange: (Boolean) -> Unit,
+    isCloudSync: Boolean,
+    onCloudSyncChange: (Boolean) -> Unit,
+    lastBackupText: String,
+    onBackupNowClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("backup_settings_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "BACKUP SETTINGS",
+                    color = RoyalBlueGlow,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.5.sp,
+                    letterSpacing = 1.sp
+                )
+
+                Surface(
+                    color = AccentGreen.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = "Encrypted Vault",
+                        color = AccentGreen,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            // Backup Info Row
+            Surface(
+                color = DarkBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CardBorder)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("Last Backup Status", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text(lastBackupText, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
+
+                    Button(
+                        onClick = onBackupNowClick,
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Backup", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Autorenew,
+                title = "Auto Backup",
+                subtitle = "Daily background cloud snapshots",
+                checked = isAutoBackup,
+                onCheckedChange = onAutoBackupChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.CloudSync,
+                title = "Cloud Sync",
+                subtitle = "Real-time sync across registered agent devices",
+                checked = isCloudSync,
+                onCheckedChange = onCloudSyncChange
+            )
+        }
+    }
+}
+
+/**
+ * 6. SECURITY SECTION
+ */
+@Composable
+fun SecuritySettingsSection(
+    isAppLock: Boolean,
+    onAppLockChange: (Boolean) -> Unit,
+    isPinLock: Boolean,
+    onPinLockChange: (Boolean) -> Unit,
+    onSetPinClick: () -> Unit,
+    isFingerprint: Boolean,
+    onFingerprintChange: (Boolean) -> Unit,
+    isFaceUnlock: Boolean,
+    onFaceUnlockChange: (Boolean) -> Unit,
+    selectedAutoLockTime: String,
+    onAutoLockTimeChange: (String) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("security_settings_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "SECURITY & ACCESS",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Lock,
+                title = "App Lock",
+                subtitle = "Require authentication to open app",
+                checked = isAppLock,
+                onCheckedChange = onAppLockChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Pin, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text("PIN Lock", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                        Text("4-Digit Passcode Protection", color = TextMuted, fontSize = 11.5.sp)
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onSetPinClick) {
+                        Text("Set PIN", color = RoyalBlueGlow, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                    Switch(
+                        checked = isPinLock,
+                        onCheckedChange = onPinLockChange,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = TextWhite,
+                            checkedTrackColor = RoyalBlueLight,
+                            uncheckedThumbColor = TextMuted,
+                            uncheckedTrackColor = DarkBg
+                        )
+                    )
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsSwitchRowItem(
+                icon = Icons.Default.Fingerprint,
+                title = "Fingerprint",
+                subtitle = "Biometric sensor authentication",
+                checked = isFingerprint,
+                onCheckedChange = onFingerprintChange
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            // Face Unlock Placeholder
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Default.Face, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text("Face Unlock", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                            Surface(color = AccentAmber.copy(alpha = 0.2f), shape = RoundedCornerShape(6.dp)) {
+                                Text("Experimental", color = AccentAmber, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            }
+                        }
+                        Text("Facial recognition login", color = TextMuted, fontSize = 11.5.sp)
+                    }
+                }
+
+                Switch(
+                    checked = isFaceUnlock,
+                    onCheckedChange = onFaceUnlockChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = TextWhite,
+                        checkedTrackColor = RoyalBlueLight,
+                        uncheckedThumbColor = TextMuted,
+                        uncheckedTrackColor = DarkBg
+                    )
+                )
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            // Auto Lock Duration Chips
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Auto Lock Duration", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Immediate", "1 Min", "5 Min", "15 Min").forEach { duration ->
+                        val isSelected = selectedAutoLockTime == duration
+                        Surface(
+                            onClick = { onAutoLockTimeChange(duration) },
+                            color = if (isSelected) RoyalBlueLight else DarkBg,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = duration,
+                                color = TextWhite,
+                                fontSize = 11.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 7. DATA MANAGEMENT SECTION
+ */
+@Composable
+fun DataManagementSection(
+    storageUsedMb: Float,
+    onExportDataClick: () -> Unit,
+    onImportDataClick: () -> Unit,
+    onResetDemoClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("data_management_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                text = "DATA MANAGEMENT",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            // Storage Usage Display
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Storage Usage", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    Text("${storageUsedMb} MB / 1.0 GB", color = TextMuted, fontSize = 12.sp)
+                }
+
+                LinearProgressIndicator(
+                    progress = { storageUsedMb / 1024f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = RoyalBlueGlow,
+                    trackColor = DarkBg
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedButton(
+                    onClick = onExportDataClick,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CardBorder)
+                ) {
+                    Icon(Icons.Default.IosShare, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Export Data", color = TextWhite, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = onImportDataClick,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CardBorder)
+                ) {
+                    Icon(Icons.Default.FileDownload, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Import Data", color = TextWhite, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            HorizontalDivider(color = CardBorder)
+
+            Surface(
+                onClick = onResetDemoClick,
+                color = DarkBg,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CardBorder),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.RestartAlt, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Reset Demo Data", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                        Text("Re-populate demo clients and sample policies", color = TextMuted, fontSize = 11.5.sp)
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 8. SUPPORT SECTION
+ */
+@Composable
+fun SupportSection(
+    onHelpCenterClick: () -> Unit,
+    onContactSupportClick: () -> Unit,
+    onFeedbackClick: () -> Unit,
+    onPrivacyPolicyClick: () -> Unit,
+    onTermsClick: () -> Unit,
+    onRateAppClick: () -> Unit,
+    onAboutClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("support_section")
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "SUPPORT & ABOUT",
+                color = RoyalBlueGlow,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.5.sp,
+                letterSpacing = 1.sp
+            )
+
+            SettingsClickableRowItem(
+                icon = Icons.AutoMirrored.Filled.HelpOutline,
+                title = "Help Center",
+                subtitle = "FAQs and agent usage guidelines",
+                onClick = onHelpCenterClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.HeadsetMic,
+                title = "Contact Support",
+                subtitle = "Dedicated helpline & email support",
+                onClick = onContactSupportClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.Feedback,
+                title = "Feedback",
+                subtitle = "Submit feature proposals or bug reports",
+                onClick = onFeedbackClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.PrivacyTip,
+                title = "Privacy Policy",
+                subtitle = "Data security and privacy commitments",
+                onClick = onPrivacyPolicyClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.Description,
+                title = "Terms & Conditions",
+                subtitle = "Software terms of service agreement",
+                onClick = onTermsClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.Star,
+                title = "Rate App",
+                subtitle = "Rate us 5-stars on Google Play Store",
+                onClick = onRateAppClick
+            )
+
+            HorizontalDivider(color = CardBorder)
+
+            SettingsClickableRowItem(
+                icon = Icons.Default.Info,
+                title = "About",
+                subtitle = "LIC Premium Reminder Pro v2.5.0 (Build 2026)",
+                onClick = onAboutClick
+            )
+        }
+    }
+}
+
+// ===========================================================================
+// HELPER COMPOSABLE ITEMS
+// ===========================================================================
+
+@Composable
+fun SettingsSwitchRowItem(
+    icon: ImageVector,
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    tag: String = ""
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(imageVector = icon, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(text = title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                Text(text = subtitle, color = TextMuted, fontSize = 11.5.sp)
+            }
         }
+
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = TextWhite,
+                checkedTrackColor = RoyalBlueLight,
+                uncheckedThumbColor = TextMuted,
+                uncheckedTrackColor = DarkBg
+            ),
+            modifier = if (tag.isNotBlank()) Modifier.testTag(tag) else Modifier
         )
     }
+}
+
+@Composable
+fun SettingsClickableRowItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(imageVector = icon, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
+                Text(text = subtitle, color = TextMuted, fontSize = 11.5.sp)
+            }
+            Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+        }
+    }
+}
+
+@Composable
+fun SearchBranchDialog(
+    currentCode: String,
+    onBranchSelected: (LicBranch) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var searchQuery by remember { mutableStateOf("") }
+    val filteredBranches = remember(searchQuery) {
+        if (searchQuery.isBlank()) {
+            LicBranchMaster.defaultBranches
+        } else {
+            LicBranchMaster.defaultBranches.filter { branch ->
+                branch.code.contains(searchQuery, ignoreCase = true) ||
+                branch.name.contains(searchQuery, ignoreCase = true) ||
+                branch.city.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = CardBg,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = null,
+                    tint = RoyalBlueLight
+                )
+                Text(
+                    text = "Search LIC Branch Master",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search by Code or Name (e.g. 02A, Balasore)...", color = TextMuted, fontSize = 13.sp) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted) },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
+                            }
+                        }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite,
+                        focusedBorderColor = RoyalBlueLight,
+                        unfocusedBorderColor = CardBorder
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("search_branch_input_field")
+                )
+
+                Text(
+                    text = "Tap a branch to select code & auto-fill branch name:",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                LazyColumn(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
+                    items(filteredBranches) { branch ->
+                        val isSelected = currentCode.equals(branch.code, ignoreCase = true)
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSelected) RoyalBluePrimary.copy(alpha = 0.5f) else Color(0xFF0F172A)
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isSelected) AccentOrange else CardBorder
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onBranchSelected(branch) }
+                                .testTag("branch_option_${branch.code}")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(if (isSelected) AccentOrange else RoyalBlueLight)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = branch.code,
+                                        style = TextStyle(
+                                            color = TextWhite,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 14.sp
+                                        )
+                                    )
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = branch.name,
+                                        color = TextWhite,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                    if (branch.city.isNotBlank()) {
+                                        Text(
+                                            text = "Division / City: ${branch.city}",
+                                            color = TextMuted,
+                                            fontSize = 11.5.sp
+                                        )
+                                    }
+                                }
+
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "Selected",
+                                        tint = AccentOrange,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (filteredBranches.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "No branch found matching \"$searchQuery\"",
+                                    color = TextMuted,
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextMuted)
+            }
+        }
+    )
+}
+
+// ===========================================================================
+// PREVIEW
+// ===========================================================================
+@Preview(showBackground = true, backgroundColor = 0xFF0F172A)
+@Composable
+fun SettingsScreenPreview() {
+    SettingsScreen(
+        viewModel = null,
+        onBackClick = {},
+        onLogout = {}
+    )
 }

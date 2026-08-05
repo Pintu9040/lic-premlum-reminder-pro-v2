@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">LIC Reminder Pro</string>
+    <string name="app_name">LIC Agent CRM</string>
     <string name="google_app_id" translatable="false">1:396712934683:android:ae1f6c21be0e002028a7be</string>
     <string name="google_api_key" translatable="false">AIzaSyBzNOm75LoF_Wkz8kXoJWDwysJs8nZRV7s</string>
     <string name="firebase_database_url" translatable="false">https://lic-reminder-pro-8f60e.firebaseio.com</string>

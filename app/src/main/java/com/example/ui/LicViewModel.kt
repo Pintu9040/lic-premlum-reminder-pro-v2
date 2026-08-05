@@ -16,6 +16,23 @@ enum class PolicySortOption { NEXT_DUE, PREMIUM_AMOUNT, CUSTOMER_NAME, RECENTLY_
 enum class PolicyFilterDue { ALL, DUE_TODAY, DUE_THIS_MONTH, OVERDUE, UPCOMING }
 enum class CustomerFilterStatus { ALL, ACTIVE, DUE, LAPSED }
 
+enum class FilterCategory { DUE_DATE, STATUS, MODE }
+
+enum class SearchFilterOption(val label: String, val category: FilterCategory) {
+    TODAY_DUE("Today Due", FilterCategory.DUE_DATE),
+    TOMORROW_DUE("Tomorrow Due", FilterCategory.DUE_DATE),
+    THIS_WEEK("This Week", FilterCategory.DUE_DATE),
+    THIS_MONTH("This Month", FilterCategory.DUE_DATE),
+    UPCOMING("Upcoming", FilterCategory.DUE_DATE),
+    OVERDUE("Overdue", FilterCategory.DUE_DATE),
+    PAID("Paid", FilterCategory.STATUS),
+    UNPAID("Unpaid", FilterCategory.STATUS),
+    HALF_YEARLY("Half-Yearly", FilterCategory.MODE),
+    QUARTERLY("Quarterly", FilterCategory.MODE),
+    MONTHLY("Monthly", FilterCategory.MODE),
+    YEARLY("Yearly", FilterCategory.MODE)
+}
+
 enum class PaymentDateFilter { ALL, TODAY, THIS_WEEK, THIS_MONTH }
 enum class PaymentModeFilter { ALL, CASH, UPI, BANK_TRANSFER, CHEQUE }
 
@@ -44,6 +61,9 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
     // Search & Filter State
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _selectedSearchFilters = MutableStateFlow<Set<SearchFilterOption>>(emptySet())
+    val selectedSearchFilters: StateFlow<Set<SearchFilterOption>> = _selectedSearchFilters.asStateFlow()
 
     private val _statusFilter = MutableStateFlow(PolicyFilterStatus.ALL)
     val statusFilter: StateFlow<PolicyFilterStatus> = _statusFilter.asStateFlow()
@@ -81,9 +101,18 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         repository.allCustomers,
         repository.allPolicies,
         _searchQuery,
-        _customerFilter
-    ) { customerList, policyList, query, filter ->
+        _customerFilter,
+        _selectedSearchFilters
+    ) { customerList, policyList, query, filter, searchFilters ->
         val today = LocalDate.now()
+        val todayStr = today.toString()
+        val tomorrowStr = today.plusDays(1).toString()
+        val weekEnd = today.plusDays(7)
+
+        val dateFilters = searchFilters.filter { it.category == FilterCategory.DUE_DATE }
+        val statusFilters = searchFilters.filter { it.category == FilterCategory.STATUS }
+        val modeFilters = searchFilters.filter { it.category == FilterCategory.MODE }
+
         customerList.filter { customer ->
             val custPolicies = policyList.filter { it.customerId == customer.id }
 
@@ -122,7 +151,68 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                 CustomerFilterStatus.LAPSED -> computedStatus == CustomerFilterStatus.LAPSED
             }
 
-            matchesQuery && matchesFilter
+            // Multi-selection Search Filters
+            val matchesDateFilter = if (dateFilters.isEmpty()) true else {
+                dateFilters.any { opt ->
+                    when (opt) {
+                        SearchFilterOption.TODAY_DUE -> custPolicies.any { it.dueDate == todayStr }
+                        SearchFilterOption.TOMORROW_DUE -> custPolicies.any { it.dueDate == tomorrowStr }
+                        SearchFilterOption.THIS_WEEK -> custPolicies.any { p ->
+                            try {
+                                val d = LocalDate.parse(p.dueDate)
+                                !d.isBefore(today) && !d.isAfter(weekEnd)
+                            } catch (e: Exception) { false }
+                        }
+                        SearchFilterOption.THIS_MONTH -> custPolicies.any { p ->
+                            try {
+                                val d = LocalDate.parse(p.dueDate)
+                                d.monthValue == today.monthValue && d.year == today.year
+                            } catch (e: Exception) { false }
+                        }
+                        SearchFilterOption.UPCOMING -> custPolicies.any { p ->
+                            try {
+                                val d = LocalDate.parse(p.dueDate)
+                                d.isAfter(today)
+                            } catch (e: Exception) { false }
+                        }
+                        SearchFilterOption.OVERDUE -> custPolicies.any { p ->
+                            try {
+                                val d = LocalDate.parse(p.dueDate)
+                                d.isBefore(today) && !p.status.equals("Paid", ignoreCase = true)
+                            } catch (e: Exception) { false } || p.status.equals("Lapsed", ignoreCase = true)
+                        }
+                        else -> false
+                    }
+                }
+            }
+
+            val matchesStatusFilter = if (statusFilters.isEmpty()) true else {
+                statusFilters.any { opt ->
+                    when (opt) {
+                        SearchFilterOption.PAID -> custPolicies.isNotEmpty() && custPolicies.all {
+                            it.status.equals("Paid", ignoreCase = true) || it.status.equals("Paid-up", ignoreCase = true) || it.status.equals("Active", ignoreCase = true)
+                        }
+                        SearchFilterOption.UNPAID -> custPolicies.any {
+                            it.status.equals("Due", ignoreCase = true) || it.status.equals("Grace", ignoreCase = true) || it.status.equals("Lapsed", ignoreCase = true) || it.status.equals("Unpaid", ignoreCase = true)
+                        }
+                        else -> false
+                    }
+                }
+            }
+
+            val matchesModeFilter = if (modeFilters.isEmpty()) true else {
+                modeFilters.any { opt ->
+                    when (opt) {
+                        SearchFilterOption.HALF_YEARLY -> custPolicies.any { it.premiumMode.contains("Half", ignoreCase = true) || it.premiumMode.equals("Hly", ignoreCase = true) }
+                        SearchFilterOption.QUARTERLY -> custPolicies.any { it.premiumMode.contains("Quarter", ignoreCase = true) || it.premiumMode.equals("Qly", ignoreCase = true) }
+                        SearchFilterOption.MONTHLY -> custPolicies.any { it.premiumMode.contains("Month", ignoreCase = true) || it.premiumMode.equals("Mly", ignoreCase = true) }
+                        SearchFilterOption.YEARLY -> custPolicies.any { it.premiumMode.contains("Year", ignoreCase = true) || it.premiumMode.equals("Yly", ignoreCase = true) }
+                        else -> false
+                    }
+                }
+            }
+
+            matchesQuery && matchesFilter && matchesDateFilter && matchesStatusFilter && matchesModeFilter
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -304,6 +394,14 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
+    }
+
+    fun setSearchFilters(filters: Set<SearchFilterOption>) {
+        _selectedSearchFilters.value = filters
+    }
+
+    fun resetSearchFilters() {
+        _selectedSearchFilters.value = emptySet()
     }
 
     fun setCustomerFilter(filter: CustomerFilterStatus) {

@@ -5,31 +5,40 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.*
+
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.example.ui.SearchFilterOption
 
 // Primary Large Action Button (Minimum 56dp height, 16-20dp rounded corners)
 @Composable
@@ -126,7 +135,7 @@ fun SecondaryActionButton(
     }
 }
 
-// Reusable Search Bar with Quick Clear Action
+// Reusable Production-Quality Search Bar with High-Contrast Dark Theme UI, Glow & Animations
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchBarComponent(
@@ -135,67 +144,460 @@ fun SearchBarComponent(
     modifier: Modifier = Modifier,
     placeholderText: String = "Search customers, policy no, plan...",
     onFilterClick: (() -> Unit)? = null,
-    testTag: String = "search_bar_input"
+    testTag: String = "search_bar_input",
+    selectedFilters: Set<SearchFilterOption> = emptySet(),
+    onApplyFilters: ((Set<SearchFilterOption>) -> Unit)? = null,
+    onResetFilters: (() -> Unit)? = null
 ) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQueryChange,
+    var isFocused by remember { mutableStateOf(false) }
+    var localShowBottomSheet by remember { mutableStateOf(false) }
+
+    // Smooth focus / unfocus animations
+    val borderColor by animateColorAsState(
+        targetValue = if (isFocused) Color(0xFF3B82F6) else Color(0xFF334155),
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+        label = "SearchBarBorderColor"
+    )
+
+    val borderWidth by animateDpAsState(
+        targetValue = if (isFocused) 2.dp else 1.dp,
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+        label = "SearchBarBorderWidth"
+    )
+
+    val shadowElevation by animateDpAsState(
+        targetValue = if (isFocused) 10.dp else 2.dp,
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+        label = "SearchBarShadow"
+    )
+
+    val iconTint by animateColorAsState(
+        targetValue = if (selectedFilters.isNotEmpty()) Color(0xFF3B82F6) else if (isFocused) Color(0xFF3B82F6) else Color(0xFF94A3B8),
+        animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing),
+        label = "SearchBarIconTint"
+    )
+
+    Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(48.dp)
-            .testTag(testTag),
-        placeholder = {
-            Text(
-                text = placeholderText,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    fontSize = 13.sp
+            .padding(horizontal = 20.dp) // 20dp horizontal padding
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp) // 60dp search field height
+                .shadow(
+                    elevation = shadowElevation,
+                    shape = RoundedCornerShape(28.dp), // 28dp rounded corners
+                    spotColor = Color(0xFF2563EB), // Subtle Royal Blue glow on focus
+                    ambientColor = Color(0xFF3B82F6)
                 )
-            )
-        },
-        leadingIcon = {
-            Icon(
-                imageVector = Icons.Default.Search,
-                contentDescription = "Search",
-                tint = RoyalBluePrimary,
-                modifier = Modifier.size(20.dp)
-            )
-        },
-        trailingIcon = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(32.dp)) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Clear",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
+                .border(
+                    width = borderWidth,
+                    color = borderColor,
+                    shape = RoundedCornerShape(28.dp)
+                ),
+            shape = RoundedCornerShape(28.dp),
+            color = Color(0xFF1E293B) // Dark theme surface
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Left Search Icon (24dp)
+                Icon(
+                    imageVector = Icons.Default.Search,
+                    contentDescription = "Search",
+                    tint = if (isFocused) Color(0xFF3B82F6) else Color(0xFF94A3B8),
+                    modifier = Modifier.size(24.dp)
+                )
+
+                Spacer(modifier = Modifier.width(14.dp))
+
+                // Input & Placeholder Box
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (query.isEmpty()) {
+                        Text(
+                            text = placeholderText,
+                            style = TextStyle(
+                                color = Color(0xFFBFC7D5),
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    BasicTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { focusState ->
+                                isFocused = focusState.isFocused
+                            }
+                            .testTag(testTag),
+                        textStyle = TextStyle(
+                            color = Color(0xFFFFFFFF),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        cursorBrush = SolidColor(Color(0xFF2563EB)),
+                        singleLine = true,
+                        decorationBox = { innerTextField ->
+                            Box(contentAlignment = Alignment.CenterStart) {
+                                innerTextField()
+                            }
+                        }
+                    )
+                }
+
+                // Clear (X) icon & Filter icon vertically centered
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (query.isNotEmpty()) {
+                        IconButton(
+                            onClick = { onQueryChange("") },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    IconButton(
+                        onClick = {
+                            if (onFilterClick != null) {
+                                onFilterClick.invoke()
+                            } else {
+                                localShowBottomSheet = true
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("search_filter_icon_button")
+                    ) {
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            Icon(
+                                imageVector = Icons.Default.FilterList,
+                                contentDescription = "Filter",
+                                tint = iconTint,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            if (selectedFilters.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(Color(0xFF3B82F6), CircleShape)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (localShowBottomSheet && onApplyFilters != null) {
+        SearchFilterBottomSheet(
+            initialFilters = selectedFilters,
+            onApply = { filters ->
+                onApplyFilters(filters)
+                localShowBottomSheet = false
+            },
+            onReset = {
+                onResetFilters?.invoke()
+                localShowBottomSheet = false
+            },
+            onDismiss = {
+                localShowBottomSheet = false
+            }
+        )
+    }
+}
+
+// Material 3 Search Filter Bottom Sheet
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SearchFilterBottomSheet(
+    initialFilters: Set<SearchFilterOption>,
+    onApply: (Set<SearchFilterOption>) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedOptions by remember { mutableStateOf(initialFilters) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF1E293B),
+        contentColor = Color(0xFFF8FAFC),
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(color = Color(0xFF475569))
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.FilterList,
+                        contentDescription = "Filter Options",
+                        tint = Color(0xFF3B82F6),
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Filter Customer List",
+                        style = TextStyle(
+                            color = Color(0xFFF8FAFC),
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
+                }
+
+                if (selectedOptions.isNotEmpty()) {
+                    Surface(
+                        color = Color(0xFF2563EB).copy(alpha = 0.2f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6))
+                    ) {
+                        Text(
+                            text = "${selectedOptions.size} Selected",
+                            color = Color(0xFF3B82F6),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                 }
-                IconButton(
-                    onClick = { onFilterClick?.invoke() },
-                    modifier = Modifier.size(32.dp)
+            }
+
+            HorizontalDivider(color = Color(0xFF334155), modifier = Modifier.padding(vertical = 8.dp))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                FilterCategorySection(
+                    title = "DUE DATE",
+                    options = listOf(
+                        SearchFilterOption.TODAY_DUE,
+                        SearchFilterOption.TOMORROW_DUE,
+                        SearchFilterOption.THIS_WEEK,
+                        SearchFilterOption.THIS_MONTH,
+                        SearchFilterOption.UPCOMING,
+                        SearchFilterOption.OVERDUE
+                    ),
+                    selectedOptions = selectedOptions,
+                    onToggleOption = { option ->
+                        selectedOptions = if (selectedOptions.contains(option)) {
+                            selectedOptions - option
+                        } else {
+                            selectedOptions + option
+                        }
+                    }
+                )
+
+                FilterCategorySection(
+                    title = "PAYMENT STATUS",
+                    options = listOf(
+                        SearchFilterOption.PAID,
+                        SearchFilterOption.UNPAID
+                    ),
+                    selectedOptions = selectedOptions,
+                    onToggleOption = { option ->
+                        selectedOptions = if (selectedOptions.contains(option)) {
+                            selectedOptions - option
+                        } else {
+                            selectedOptions + option
+                        }
+                    }
+                )
+
+                FilterCategorySection(
+                    title = "PREMIUM MODE",
+                    options = listOf(
+                        SearchFilterOption.HALF_YEARLY,
+                        SearchFilterOption.QUARTERLY,
+                        SearchFilterOption.MONTHLY,
+                        SearchFilterOption.YEARLY
+                    ),
+                    selectedOptions = selectedOptions,
+                    onToggleOption = { option ->
+                        selectedOptions = if (selectedOptions.contains(option)) {
+                            selectedOptions - option
+                        } else {
+                            selectedOptions + option
+                        }
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        selectedOptions = emptySet()
+                        onReset()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .testTag("filter_reset_button"),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF475569)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFF94A3B8)
+                    )
                 ) {
                     Icon(
-                        imageVector = Icons.Default.FilterList,
-                        contentDescription = "Filter",
-                        tint = RoyalBluePrimary,
+                        imageVector = Icons.Default.RestartAlt,
+                        contentDescription = "Reset",
                         modifier = Modifier.size(18.dp)
                     )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Reset",
+                        style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    )
                 }
-                Spacer(modifier = Modifier.width(4.dp))
+
+                Button(
+                    onClick = {
+                        onApply(selectedOptions)
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .height(50.dp)
+                        .testTag("filter_apply_button"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2563EB),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Apply",
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Apply Filters",
+                        style = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    )
+                }
             }
-        },
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = MaterialTheme.colorScheme.surface,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-            focusedBorderColor = RoyalBluePrimary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant
+        }
+    }
+}
+
+@Composable
+private fun FilterCategorySection(
+    title: String,
+    options: List<SearchFilterOption>,
+    selectedOptions: Set<SearchFilterOption>,
+    onToggleOption: (SearchFilterOption) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = TextStyle(
+                color = Color(0xFF3B82F6),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+            )
         )
-    )
+
+        options.chunked(2).forEach { rowOptions ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rowOptions.forEach { option ->
+                    val isChecked = selectedOptions.contains(option)
+                    Surface(
+                        onClick = { onToggleOption(option) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("filter_option_${option.name.lowercase()}"),
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isChecked) Color(0xFF2563EB).copy(alpha = 0.15f) else Color(0xFF0F172A),
+                        border = androidx.compose.foundation.BorderStroke(
+                            width = 1.dp,
+                            color = if (isChecked) Color(0xFF3B82F6) else Color(0xFF334155)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = isChecked,
+                                onCheckedChange = { onToggleOption(option) },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor = Color(0xFF2563EB),
+                                    uncheckedColor = Color(0xFF64748B),
+                                    checkmarkColor = Color.White
+                                ),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = option.label,
+                                style = TextStyle(
+                                    color = if (isChecked) Color.White else Color(0xFFCBD5E1),
+                                    fontSize = 13.5.sp,
+                                    fontWeight = if (isChecked) FontWeight.SemiBold else FontWeight.Normal
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+                if (rowOptions.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
 }
 
 // Stat Card with rounded corners, subtle shadow, status colors & crisp typography
@@ -788,20 +1190,11 @@ fun launchPhoneCall(context: Context, phoneNumber: String) {
 }
 
 fun launchWhatsAppMessage(context: Context, phoneNumber: String, message: String) {
-    if (phoneNumber.isBlank()) {
-        Toast.makeText(context, "Phone number not available", Toast.LENGTH_SHORT).show()
-        return
-    }
-    val formattedNumber = phoneNumber.replace("+", "").replace(" ", "").trim()
-    try {
-        val url = "https://api.whatsapp.com/send?phone=91$formattedNumber&text=${Uri.encode(message)}"
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            data = Uri.parse(url)
-        }
-        context.startActivity(intent)
-    } catch (e: Exception) {
-        Toast.makeText(context, "WhatsApp not installed or unable to open link", Toast.LENGTH_SHORT).show()
-    }
+    com.example.whatsapp.WhatsAppAutomation.sendWhatsAppReminder(
+        context = context,
+        phoneNumber = phoneNumber,
+        message = message
+    )
 }
 
 fun launchSMS(context: Context, phoneNumber: String, message: String = "") {

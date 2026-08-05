@@ -2,6 +2,7 @@ package com.example
 
 import android.app.Application
 import android.util.Log
+import com.example.notifications.NotificationEngine
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
 
@@ -17,6 +18,12 @@ class LicApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         initializeFirebase()
+        try {
+            NotificationEngine.createNotificationChannel(this)
+            NotificationEngine.scheduleBackgroundWorkers(this)
+        } catch (e: Exception) {
+            Log.e("LicApplication", "Failed to initialize NotificationEngine: ${e.localizedMessage}", e)
+        }
     }
 
     private fun initializeFirebase() {

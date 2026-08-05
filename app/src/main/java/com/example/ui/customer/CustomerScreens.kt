@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -63,6 +64,24 @@ import java.io.ByteArrayOutputStream
 import java.time.LocalDate
 import java.util.UUID
 
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.Brush
+
+enum class CustomerSortOption(val label: String) {
+    NAME_AZ("Name A–Z"),
+    RECENTLY_ADDED("Recently Added"),
+    LATEST_POLICY("Latest Policy"),
+    DUE_DATE("Due Date")
+}
+
+enum class CustomerFilterTab(val label: String) {
+    ALL("All"),
+    ACTIVE("Active"),
+    DUE_TODAY("Due Today"),
+    UPCOMING("Upcoming"),
+    OVERDUE("Overdue")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomerListScreen(
@@ -74,147 +93,479 @@ fun CustomerListScreen(
     val policies by viewModel.policies.collectAsState()
     val payments by viewModel.payments.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
-    val selectedFilter by viewModel.customerFilter.collectAsState()
     val context = LocalContext.current
 
+    var isSearchVisible by remember { mutableStateOf(false) }
+    var selectedFilterTab by remember { mutableStateOf(CustomerFilterTab.ALL) }
+    var selectedSortOption by remember { mutableStateOf(CustomerSortOption.NAME_AZ) }
+    var showSortMenu by remember { mutableStateOf(false) }
+    var showFilterBottomSheet by remember { mutableStateOf(false) }
+    val selectedSearchFilters by viewModel.selectedSearchFilters.collectAsState()
     var policyForPaymentCollection by remember { mutableStateOf<PolicyEntity?>(null) }
+    var customerToDelete by remember { mutableStateOf<CustomerEntity?>(null) }
+    var customerToEdit by remember { mutableStateOf<CustomerEntity?>(null) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Header Surface
-        Surface(
-            color = RoyalBluePrimary,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                // Header Title and Counter
-                Column {
-                    Text(
-                        text = "Customer CRM Directory",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White,
-                            fontSize = 20.sp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${customers.size} Active Portfolios",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = AccentOrangeLight,
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 12.sp
-                        )
-                    )
-                }
+    var isLoading by remember { mutableStateOf(false) }
+    var isError by remember { mutableStateOf(false) }
 
-                Spacer(modifier = Modifier.height(12.dp))
+    val today = remember { LocalDate.now() }
 
-                // Modern Search Bar
-                SearchBarComponent(
-                    query = searchQuery,
-                    onQueryChange = { viewModel.setSearchQuery(it) },
-                    placeholderText = "Search by Name, Mobile, Policy #, PAN, Aadhaar...",
-                    testTag = "customer_list_search_input"
-                )
+    // Filter & Sort Customer List
+    val filteredCustomers = remember(customers, policies, searchQuery, selectedFilterTab, selectedSortOption) {
+        val list = customers.filter { customer ->
+            val custPolicies = policies.filter { it.customerId == customer.id }
 
-                Spacer(modifier = Modifier.height(12.dp))
+            // Search matching by Name, Mobile, or Policy Number
+            val matchesQuery = searchQuery.isBlank() ||
+                    customer.name.contains(searchQuery, ignoreCase = true) ||
+                    customer.mobile.contains(searchQuery) ||
+                    custPolicies.any { it.policyNumber.contains(searchQuery, ignoreCase = true) }
 
-                // Scrollable Horizontal Filter Chips
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    val filters = listOf(
-                        Triple(CustomerFilterStatus.ALL, "All", Icons.Default.Group),
-                        Triple(CustomerFilterStatus.ACTIVE, "Active", Icons.Default.CheckCircle),
-                        Triple(CustomerFilterStatus.DUE, "Due", Icons.Default.AccessTime),
-                        Triple(CustomerFilterStatus.LAPSED, "Lapsed", Icons.Default.Cancel)
-                    )
-
-                    items(filters) { (filterEnum, label, icon) ->
-                        val isSelected = selectedFilter == filterEnum
-                        Surface(
-                            onClick = { viewModel.setCustomerFilter(filterEnum) },
-                            shape = RoundedCornerShape(50.dp),
-                            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.2f),
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isSelected) Color.White else Color.White.copy(alpha = 0.35f)
-                            )
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
-                            ) {
-                                Icon(
-                                    imageVector = icon,
-                                    contentDescription = null,
-                                    tint = if (isSelected) RoyalBluePrimary else Color.White,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) RoyalBluePrimary else Color.White,
-                                        fontSize = 12.sp
-                                    ),
-                                    maxLines = 1
-                                )
-                            }
-                        }
-                    }
-                }
+            // Filter logic
+            val isOverdue = custPolicies.any { policy ->
+                try {
+                    val d = LocalDate.parse(policy.dueDate)
+                    d.isBefore(today) && !policy.status.equals("Paid-up", ignoreCase = true)
+                } catch (e: Exception) { false }
             }
+            val isDueToday = custPolicies.any { policy ->
+                try {
+                    val d = LocalDate.parse(policy.dueDate)
+                    d.isEqual(today) && !policy.status.equals("Paid-up", ignoreCase = true)
+                } catch (e: Exception) { false }
+            }
+            val isUpcoming = custPolicies.any { policy ->
+                try {
+                    val d = LocalDate.parse(policy.dueDate)
+                    d.isAfter(today) && d.isBefore(today.plusDays(30)) && !policy.status.equals("Paid-up", ignoreCase = true)
+                } catch (e: Exception) { false }
+            }
+            val isActive = custPolicies.isNotEmpty() && !isOverdue && !isDueToday
+
+            val matchesFilter = when (selectedFilterTab) {
+                CustomerFilterTab.ALL -> true
+                CustomerFilterTab.ACTIVE -> isActive
+                CustomerFilterTab.DUE_TODAY -> isDueToday
+                CustomerFilterTab.UPCOMING -> isUpcoming
+                CustomerFilterTab.OVERDUE -> isOverdue
+            }
+
+            matchesQuery && matchesFilter
         }
 
-        if (customers.isEmpty()) {
-            StandardEmptyState(
-                title = "No Customers Found",
-                description = "No customer profiles match your search or filter criteria. Tap '+ Add Client' to create a portfolio.",
-                icon = Icons.Outlined.People,
-                actionLabel = "Add New Client",
-                onActionClick = onAddCustomer
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(customers, key = { it.id }) { customer ->
-                    val customerPolicies = remember(policies, customer.id) {
-                        policies.filter { it.customerId == customer.id }
-                    }
-                    val customerPayments = remember(payments, customer.id) {
-                        payments.filter { it.customerId == customer.id }
-                    }
-
-                    CustomerCard(
-                        customer = customer,
-                        customerPolicies = customerPolicies,
-                        customerPayments = customerPayments,
-                        onClick = { onSelectCustomer(customer) },
-                        onRecordPayment = {
-                            val activePolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) }
-                                ?: customerPolicies.firstOrNull()
-                            if (activePolicy != null) {
-                                policyForPaymentCollection = activePolicy
-                            }
-                        }
-                    )
-                }
+        // Apply Sorting
+        when (selectedSortOption) {
+            CustomerSortOption.NAME_AZ -> list.sortedBy { it.name.lowercase() }
+            CustomerSortOption.RECENTLY_ADDED -> list.sortedByDescending { it.id }
+            CustomerSortOption.LATEST_POLICY -> list.sortedByDescending { cust ->
+                policies.filter { it.customerId == cust.id }.maxOfOrNull { it.id } ?: 0L
+            }
+            CustomerSortOption.DUE_DATE -> list.sortedBy { cust ->
+                policies.filter { it.customerId == cust.id }
+                    .mapNotNull { try { LocalDate.parse(it.dueDate) } catch (e: Exception) { null } }
+                    .minOrNull() ?: LocalDate.MAX
             }
         }
     }
 
-    // Payment Collection Modal from Customer List Card
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // TOP APP BAR / HEADER SECTION (Royal Blue Header with 20dp section spacing & padding)
+            Surface(
+                color = RoyalBluePrimary,
+                shadowElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    // Title & Subtitle + Sort Dropdown
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Clients Directory",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 22.sp,
+                                    letterSpacing = 0.15.sp
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(
+                                text = "Manage your LIC customer portfolio",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = Color.White.copy(alpha = 0.85f),
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            )
+                        }
+
+                        // Sort Action Button
+                        Box {
+                            IconButton(
+                                onClick = { showSortMenu = true },
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .background(Color.White.copy(alpha = 0.15f))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Sort,
+                                    contentDescription = "Sort Clients",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                CustomerSortOption.values().forEach { option ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                if (selectedSortOption == option) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Check,
+                                                        contentDescription = null,
+                                                        tint = RoyalBluePrimary,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(8.dp))
+                                                } else {
+                                                    Spacer(modifier = Modifier.width(24.dp))
+                                                }
+                                                Text(
+                                                    text = option.label,
+                                                    fontWeight = if (selectedSortOption == option) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            selectedSortOption = option
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. CUSTOMER COUNT PREMIUM SUMMARY CARD (20dp radius)
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.White.copy(alpha = 0.12f),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            Brush.linearGradient(
+                                                colors = listOf(
+                                                    Color.White.copy(alpha = 0.25f),
+                                                    Color.White.copy(alpha = 0.15f)
+                                                )
+                                            )
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.People,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        text = "👥 Total Clients",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            color = Color.White.copy(alpha = 0.85f),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    )
+                                    Text(
+                                        text = "${filteredCustomers.size} Customers",
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 16.sp
+                                        )
+                                    )
+                                }
+                            }
+
+                            if (selectedFilterTab != CustomerFilterTab.ALL) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = AccentOrangeLight,
+                                    modifier = Modifier.padding(start = 8.dp)
+                                ) {
+                                    Text(
+                                        text = selectedFilterTab.label,
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. SEARCH SECTION (56dp height SearchBar + Single Filter Icon)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.setSearchQuery(it) },
+                            placeholder = {
+                                Text(
+                                    text = "Search customer, mobile, policy...",
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        color = Color.White.copy(alpha = 0.65f),
+                                        fontSize = 13.5.sp
+                                    )
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = "Search",
+                                    tint = Color.White.copy(alpha = 0.9f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotBlank()) {
+                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "Clear",
+                                            tint = Color.White.copy(alpha = 0.9f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.35f),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedContainerColor = Color.White.copy(alpha = 0.15f),
+                                unfocusedContainerColor = Color.White.copy(alpha = 0.1f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(56.dp)
+                                .testTag("clients_directory_search_input")
+                        )
+
+                        // Single Filter Button at the end
+                        Surface(
+                            onClick = { showFilterBottomSheet = true },
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (selectedSearchFilters.isNotEmpty() || selectedFilterTab != CustomerFilterTab.ALL) AccentOrangeLight else Color.White.copy(alpha = 0.15f),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                            modifier = Modifier
+                                .size(56.dp)
+                                .testTag("clients_directory_filter_button")
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = "Filter Options",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // 4. FILTER CHIPS ROW (Equal height, equal padding, horizontal scrolling, selected chip gradient + glow effect)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(horizontal = 2.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(CustomerFilterTab.values()) { filterTab ->
+                            val isSelected = selectedFilterTab == filterTab
+
+                            val animatedBgColor by animateColorAsState(
+                                targetValue = if (isSelected) RoyalBluePrimary else Color.White.copy(alpha = 0.15f),
+                                animationSpec = tween(durationMillis = 200),
+                                label = "chipBg"
+                            )
+                            val animatedBorderColor by animateColorAsState(
+                                targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                                animationSpec = tween(durationMillis = 200),
+                                label = "chipBorder"
+                            )
+
+                            Surface(
+                                onClick = { selectedFilterTab = filterTab },
+                                shape = RoundedCornerShape(20.dp),
+                                color = animatedBgColor,
+                                border = BorderStroke(1.dp, animatedBorderColor),
+                                shadowElevation = if (isSelected) 6.dp else 0.dp,
+                                modifier = Modifier
+                                    .height(40.dp)
+                                    .testTag("filter_chip_${filterTab.name.lowercase()}")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .then(
+                                            if (isSelected) {
+                                                Modifier.background(
+                                                    Brush.horizontalGradient(
+                                                        colors = listOf(RoyalBluePrimary, Color(0xFF2563EB))
+                                                    )
+                                                )
+                                            } else Modifier
+                                        )
+                                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = filterTab.label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = Color.White,
+                                            fontSize = 13.sp
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // MAIN CONTENT AREA (20dp spacing, smooth fade animations)
+            when {
+                isLoading -> {
+                    CustomerSkeletonLoader()
+                }
+
+                isError -> {
+                    CustomerErrorCard(onRetry = {
+                        isError = false
+                        viewModel.triggerSync()
+                    })
+                }
+
+                filteredCustomers.isEmpty() -> {
+                    CustomerEmptyState(onAddFirstCustomer = onAddCustomer)
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                        contentPadding = PaddingValues(bottom = 88.dp)
+                    ) {
+                        items(filteredCustomers, key = { it.id }) { customer ->
+                            val customerPolicies = remember(policies, customer.id) {
+                                policies.filter { it.customerId == customer.id }
+                            }
+                            val customerPayments = remember(payments, customer.id) {
+                                payments.filter { it.customerId == customer.id }
+                            }
+
+                            SwipeableCustomerItem(
+                                customer = customer,
+                                customerPolicies = customerPolicies,
+                                customerPayments = customerPayments,
+                                onClick = { onSelectCustomer(customer) },
+                                onRecordPayment = {
+                                    val activePolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) }
+                                        ?: customerPolicies.firstOrNull()
+                                    if (activePolicy != null) {
+                                        policyForPaymentCollection = activePolicy
+                                    }
+                                },
+                                onEditCustomer = { customerToEdit = customer },
+                                onDeleteCustomer = { customerToDelete = customer }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 7. FLOATING ACTION BUTTON (Material 3 Extended FAB, 56dp height, hidden when no customers exist)
+        AnimatedVisibility(
+            visible = customers.isNotEmpty(),
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(20.dp)
+        ) {
+            ExtendedFloatingActionButton(
+                onClick = onAddCustomer,
+                shape = RoundedCornerShape(28.dp),
+                containerColor = RoyalBluePrimary,
+                contentColor = Color.White,
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
+                modifier = Modifier
+                    .height(56.dp)
+                    .testTag("add_customer_fab")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PersonAdd,
+                    contentDescription = "Add Customer",
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "Add Customer",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                )
+            }
+        }
+    }
+
+    // Payment Collection Modal
     policyForPaymentCollection?.let { policy ->
         PaymentCollectionDialog(
             policy = policy,
@@ -232,8 +583,193 @@ fun CustomerListScreen(
             }
         )
     }
+
+    // Customer Edit Dialog
+    customerToEdit?.let { customer ->
+        AddEditCustomerDialog(
+            initialCustomer = customer,
+            onDismiss = { customerToEdit = null },
+            onSave = { updated ->
+                viewModel.updateCustomer(updated)
+                customerToEdit = null
+                Toast.makeText(context, "Customer details updated!", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    // Delete Confirmation Dialog
+    customerToDelete?.let { customer ->
+        AlertDialog(
+            onDismissRequest = { customerToDelete = null },
+            icon = { Icon(Icons.Default.Delete, contentDescription = null, tint = ErrorRed) },
+            title = { Text("Move to Trash?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Are you sure you want to remove ${customer.name} from your customer directory? Linked policies will remain preserved in repository.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteCustomer(customer)
+                        customerToDelete = null
+                        Toast.makeText(context, "${customer.name} removed.", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Delete Customer", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { customerToDelete = null },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Cancel")
+                }
+            },
+            shape = RoundedCornerShape(20.dp)
+        )
+    }
+
+    if (showFilterBottomSheet) {
+        SearchFilterBottomSheet(
+            initialFilters = selectedSearchFilters,
+            onApply = { viewModel.setSearchFilters(it) },
+            onReset = { viewModel.resetSearchFilters() },
+            onDismiss = { showFilterBottomSheet = false }
+        )
+    }
 }
 
+// SWIPEABLE CUSTOMER CONTAINER
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SwipeableCustomerItem(
+    customer: CustomerEntity,
+    customerPolicies: List<PolicyEntity>,
+    customerPayments: List<PaymentEntity>,
+    onClick: () -> Unit,
+    onRecordPayment: () -> Unit,
+    onEditCustomer: () -> Unit,
+    onDeleteCustomer: () -> Unit
+) {
+    val context = LocalContext.current
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { dismissValue ->
+            when (dismissValue) {
+                SwipeToDismissBoxValue.StartToEnd -> {
+                    // Swipe Right -> launch Call
+                    launchPhoneCall(context, customer.mobile)
+                    false
+                }
+                SwipeToDismissBoxValue.EndToStart -> {
+                    // Swipe Left -> Delete Customer Confirmation
+                    onDeleteCustomer()
+                    false
+                }
+                SwipeToDismissBoxValue.Settled -> false
+            }
+        }
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            val direction = dismissState.dismissDirection
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(
+                        when (direction) {
+                            SwipeToDismissBoxValue.StartToEnd -> RoyalBluePrimary
+                            SwipeToDismissBoxValue.EndToStart -> ErrorRed
+                            SwipeToDismissBoxValue.Settled -> Color.Transparent
+                        }
+                    )
+                    .padding(horizontal = 16.dp),
+                contentAlignment = when (direction) {
+                    SwipeToDismissBoxValue.StartToEnd -> Alignment.CenterStart
+                    SwipeToDismissBoxValue.EndToStart -> Alignment.CenterEnd
+                    SwipeToDismissBoxValue.Settled -> Alignment.Center
+                }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.25f))
+                                .clickable { launchPhoneCall(context, customer.mobile) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Phone, contentDescription = "Call", tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Call", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(EmeraldGreenSecondary)
+                                .clickable {
+                                    val msg = "Hello ${customer.name}, greeting from your LIC Advisor!"
+                                    launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, msg)
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Chat, contentDescription = "WhatsApp", tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("WhatsApp", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    } else if (direction == SwipeToDismissBoxValue.EndToStart) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White.copy(alpha = 0.25f))
+                                .clickable { onEditCustomer() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit", tint = Color.White)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Edit", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .clickable { onDeleteCustomer() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "Trash", tint = ErrorRed)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Trash", color = ErrorRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+        },
+        content = {
+            CustomerCard(
+                customer = customer,
+                customerPolicies = customerPolicies,
+                customerPayments = customerPayments,
+                onClick = onClick,
+                onRecordPayment = onRecordPayment
+            )
+        }
+    )
+}
+
+// PREMIUM MATERIAL 3 CUSTOMER CARD
 @Composable
 fun CustomerCard(
     customer: CustomerEntity,
@@ -243,64 +779,75 @@ fun CustomerCard(
     onRecordPayment: () -> Unit
 ) {
     val context = LocalContext.current
-    val today = LocalDate.now()
+    val today = remember { LocalDate.now() }
 
-    // Calculate status
-    val isLapsed = customerPolicies.any { it.status.equals("Lapsed", ignoreCase = true) }
-    val isDue = !isLapsed && customerPolicies.any { policy ->
+    // Calculate Status Badge
+    val isOverdue = customerPolicies.any { policy ->
         try {
             val d = LocalDate.parse(policy.dueDate)
-            d.isBefore(today) || d == today || d.isBefore(today.plusDays(30))
+            d.isBefore(today) && !policy.status.equals("Paid-up", ignoreCase = true)
         } catch (e: Exception) { false }
     }
-    val statusText = when {
-        customerPolicies.isEmpty() -> "New"
-        isLapsed -> "Lapsed"
-        isDue -> "Due"
+    val isUpcomingDue = !isOverdue && customerPolicies.any { policy ->
+        try {
+            val d = LocalDate.parse(policy.dueDate)
+            (d.isEqual(today) || (d.isAfter(today) && d.isBefore(today.plusDays(30)))) &&
+                    !policy.status.equals("Paid-up", ignoreCase = true)
+        } catch (e: Exception) { false }
+    }
+
+    val statusBadgeText = when {
+        isOverdue -> "Overdue"
+        isUpcomingDue -> "Upcoming Due"
         else -> "Active"
     }
 
-    // Calculate Outstanding Balance & Next Due
-    val outstandingBalance = customerPolicies
+    val (badgeBgColor, badgeTextColor) = when {
+        isOverdue -> ErrorRedContainer to ErrorRed
+        isUpcomingDue -> AccentOrangeContainer to OnAccentOrangeContainer
+        else -> EmeraldGreenContainer to EmeraldGreenSecondary
+    }
+
+    // Outstanding Amount
+    val outstandingAmount = customerPolicies
         .filter { !it.status.equals("Paid-up", ignoreCase = true) }
         .sumOf { it.premiumAmount }
 
+    // Next Due Date
     val nextDueDate = customerPolicies
         .mapNotNull {
             try { LocalDate.parse(it.dueDate) } catch (e: Exception) { null }
         }
         .minOrNull()?.toString() ?: "N/A"
 
-    val lastPaymentDate = customerPayments
-        .mapNotNull {
-            try { LocalDate.parse(it.paymentDate) } catch (e: Exception) { null }
-        }
-        .maxOrNull()?.toString() ?: "None Recorded"
-
     Card(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(2.dp, RoundedCornerShape(16.dp), spotColor = Color.Black.copy(alpha = 0.06f)),
-        shape = RoundedCornerShape(16.dp),
+            .shadow(
+                elevation = 4.dp,
+                shape = RoundedCornerShape(20.dp),
+                spotColor = Color.Black.copy(alpha = 0.08f)
+            ),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp)
-        ) {
-            // Top Row: Photo, Name, Mobile, Occupation, Policy Count & Status Badge
+        Column(modifier = Modifier.padding(16.dp)) {
+            // HEADER ROW: Avatar, Name, Mobile, Status Badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Photo Avatar / Initials
                 CustomerAvatarWithPhoto(
                     customer = customer,
-                    size = 50.dp
+                    size = 52.dp
                 )
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(14.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -314,7 +861,7 @@ fun CustomerCard(
                         overflow = TextOverflow.Ellipsis
                     )
 
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
@@ -333,90 +880,76 @@ fun CustomerCard(
                             )
                         )
                     }
-
-                    if (customer.occupation.isNotBlank()) {
-                        Text(
-                            text = customer.occupation,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = RoyalBluePrimary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 11.sp
-                            ),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
-                    StatusBadge(status = statusText)
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(RoyalBlueContainer)
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "${customerPolicies.size} ${if (customerPolicies.size == 1) "Policy" else "Policies"}",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = RoyalBluePrimary,
-                                fontSize = 11.sp
-                            )
-                        )
-                    }
+                Surface(
+                    color = badgeBgColor,
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Text(
+                        text = statusBadgeText,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = badgeTextColor,
+                            fontSize = 11.sp
+                        ),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // Metrics Bar: Outstanding Balance, Next Due, Last Payment
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // METRICS ROW: Total Policies, Outstanding, Next Due
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                MetricColumn(
-                    label = "Outstanding",
-                    value = "₹${"%.0f".format(outstandingBalance)}",
-                    valueColor = if (outstandingBalance > 0) ErrorRed else EmeraldGreenSecondary
-                )
-                MetricColumn(
-                    label = "Next Due",
-                    value = nextDueDate,
-                    valueColor = MaterialTheme.colorScheme.onSurface
-                )
-                MetricColumn(
-                    label = "Last Payment",
-                    value = lastPaymentDate,
-                    valueColor = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MetricColumn(
+                        label = "Total Policies",
+                        value = "${customerPolicies.size} ${if (customerPolicies.size == 1) "Policy" else "Policies"}",
+                        valueColor = RoyalBluePrimary
+                    )
+
+                    MetricColumn(
+                        label = "Outstanding",
+                        value = "₹${"%.0f".format(outstandingAmount)}",
+                        valueColor = if (outstandingAmount > 0) ErrorRed else EmeraldGreenSecondary
+                    )
+
+                    MetricColumn(
+                        label = "Next Due",
+                        value = nextDueDate,
+                        valueColor = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(14.dp))
 
-            // 4 Equal Width Action Buttons Row
+            // QUICK ACTIONS ROW: Call, WhatsApp, View Profile
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Call Button
+                // Call Quick Action
                 OutlinedButton(
                     onClick = { launchPhoneCall(context, customer.mobile) },
                     modifier = Modifier
                         .weight(1f)
                         .height(38.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBluePrimary),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
+                    contentPadding = PaddingValues(horizontal = 4.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Phone,
@@ -424,29 +957,28 @@ fun CustomerCard(
                         tint = RoyalBluePrimary,
                         modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(3.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Call",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = RoyalBluePrimary,
-                        maxLines = 1
+                        color = RoyalBluePrimary
                     )
                 }
 
-                // WhatsApp Button
+                // WhatsApp Quick Action
                 OutlinedButton(
                     onClick = {
                         val msg = "Hello ${customer.name}, greeting from your LIC Advisor!"
                         launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, msg)
                     },
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1.1f)
                         .height(38.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = EmeraldGreenSecondary),
                     border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldGreenSecondary),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
+                    contentPadding = PaddingValues(horizontal = 4.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Chat,
@@ -454,7 +986,7 @@ fun CustomerCard(
                         tint = EmeraldGreenSecondary,
                         modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(3.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "WhatsApp",
                         fontSize = 11.sp,
@@ -465,45 +997,15 @@ fun CustomerCard(
                     )
                 }
 
-                // Pay Button
-                Button(
-                    onClick = onRecordPayment,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(38.dp),
-                    enabled = customerPolicies.isNotEmpty(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = EmeraldGreenSecondary,
-                        disabledContainerColor = EmeraldGreenSecondary.copy(alpha = 0.4f)
-                    ),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Payments,
-                        contentDescription = "Pay",
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text(
-                        text = "Pay",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        maxLines = 1
-                    )
-                }
-
-                // Profile Button
+                // View Profile Quick Action
                 Button(
                     onClick = onClick,
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(1.2f)
                         .height(38.dp),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    contentPadding = PaddingValues(horizontal = 2.dp)
+                    contentPadding = PaddingValues(horizontal = 4.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Person,
@@ -511,9 +1013,9 @@ fun CustomerCard(
                         tint = Color.White,
                         modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.width(3.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Profile",
+                        text = "View Profile",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -524,6 +1026,209 @@ fun CustomerCard(
         }
     }
 }
+
+// SKELETON LOADER
+@Composable
+fun CustomerSkeletonLoader() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmer_alpha"
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        repeat(4) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(50.dp)
+                                .clip(CircleShape)
+                                .background(Color.Gray.copy(alpha = 0.3f))
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .width(140.dp)
+                                    .height(18.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.Gray.copy(alpha = 0.3f))
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .width(100.dp)
+                                    .height(12.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color.Gray.copy(alpha = 0.2f))
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.Gray.copy(alpha = 0.25f))
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ERROR STATE CARD
+@Composable
+fun CustomerErrorCard(
+    errorMessage: String = "Failed to load customer records.",
+    onRetry: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = ErrorRedContainer),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ErrorRed.copy(alpha = 0.3f))
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.ErrorOutline,
+                    contentDescription = "Error",
+                    tint = ErrorRed,
+                    modifier = Modifier.size(48.dp)
+                )
+                Text(
+                    text = "Unable to Display Customers",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = ErrorRed
+                    )
+                )
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                )
+                Button(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.buttonColors(containerColor = ErrorRed),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Retry", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+}
+
+// EMPTY STATE (Centered Vertically, Large Icon, Clean M3 Styling)
+@Composable
+fun CustomerEmptyState(
+    onAddFirstCustomer: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = RoyalBlueContainer,
+                border = BorderStroke(2.dp, RoyalBluePrimary.copy(alpha = 0.3f)),
+                modifier = Modifier.size(100.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.People,
+                        contentDescription = null,
+                        tint = RoyalBluePrimary,
+                        modifier = Modifier.size(52.dp)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
+            Text(
+                text = "No Clients Yet",
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 22.sp
+                )
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Add your first client to start managing LIC policies.",
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    fontSize = 14.sp
+                )
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Button(
+                onClick = onAddFirstCustomer,
+                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(horizontal = 28.dp, vertical = 14.dp),
+                elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp),
+                modifier = Modifier
+                    .height(52.dp)
+                    .testTag("add_first_customer_button")
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(20.dp), tint = Color.White)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "+ Add First Customer",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = Color.White
+                    )
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 fun MetricColumn(
@@ -678,7 +1383,16 @@ fun CustomerDetailScreen(
     }
 
     val context = LocalContext.current
-    var selectedTabIndex by remember { mutableStateOf(0) }
+
+    // Expand / Collapse state for 5 Sections
+    var isPersonalExpanded by remember { mutableStateOf(true) }
+    var isPoliciesExpanded by remember { mutableStateOf(true) }
+    var isPaymentsExpanded by remember { mutableStateOf(true) }
+    var isDocumentsExpanded by remember { mutableStateOf(true) }
+    var isNotesExpanded by remember { mutableStateOf(true) }
+
+    // More dropdown menu
+    var showMoreMenu by remember { mutableStateOf(false) }
 
     // Dialog states
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -694,10 +1408,12 @@ fun CustomerDetailScreen(
     var showFollowUpDialog by remember { mutableStateOf(false) }
     var followUpToEdit by remember { mutableStateOf<FollowUpEntity?>(null) }
 
-    // --- AUTOMATIC CRM SUMMARY COMPUTATIONS ---
+    // CRM Metrics
     val totalPoliciesCount = customerPolicies.size
-    val totalPremiumAmount = customerPolicies.fold(0.0) { acc, p -> acc + p.premiumAmount }
-    val totalPaidAmount = customerPayments.fold(0.0) { acc, p -> acc + p.paidAmount }
+    val activePoliciesCount = customerPolicies.count { it.status.equals("Active", ignoreCase = true) }
+    val duePremiumAmount = customerPolicies.filter {
+        !it.status.equals("Paid-up", ignoreCase = true) && !it.status.equals("Matured", ignoreCase = true)
+    }.sumOf { it.premiumAmount }
 
     val totalOutstandingBalance = remember(customerPolicies, customerPayments) {
         customerPolicies.fold(0.0) { acc, policy ->
@@ -706,48 +1422,7 @@ fun CustomerDetailScreen(
         }
     }
 
-    val todayStr = remember { LocalDate.now().toString() }
-    val nextDueDate = remember(customerPolicies) {
-        customerPolicies
-            .mapNotNull { it.dueDate }
-            .filter { it.isNotBlank() }
-            .minOrNull() ?: "None"
-    }
-
-    val lastPayment = remember(customerPayments) {
-        customerPayments.maxByOrNull { it.createdAt }
-    }
-
-    // Client Overall Status evaluated dynamically from policy statuses
-    val overallStatus = remember(customerPolicies, totalOutstandingBalance) {
-        when {
-            customerPolicies.any { it.status.equals("Overdue", ignoreCase = true) } -> "Overdue"
-            customerPolicies.any { it.status.equals("Lapsed", ignoreCase = true) } -> "Lapsed"
-            customerPolicies.any { it.status.equals("Due", ignoreCase = true) || it.status.equals("Grace", ignoreCase = true) } || totalOutstandingBalance > 0 -> "Due"
-            customerPolicies.isNotEmpty() -> "Active"
-            else -> "Active"
-        }
-    }
-
-    val customerRemindersCount = remember(customerPolicies, customerFollowUps, customer.dob, customer.anniversary) {
-        val dueCount = customerPolicies.count { p ->
-            val pPayments = customerPayments.filter { it.policyId == p.id }
-            getPolicyOutstandingBalance(p, pPayments) > 0
-        }
-        val fuCount = customerFollowUps.count { !it.status.equals("Completed", ignoreCase = true) }
-        val bdayCount = if (customer.dob.isNotBlank()) 1 else 0
-        val anniCount = if (customer.anniversary.isNotBlank()) 1 else 0
-        dueCount + fuCount + bdayCount + anniCount
-    }
-
-    val tabs = listOf(
-        "Policies (${customerPolicies.size})",
-        "Payment History (${customerPayments.size})",
-        "Document Vault (${customerDocs.size})",
-        "Reminders & Dues ($customerRemindersCount)",
-        "Advisor Notes",
-        "Personal Profile"
-    )
+    val nomineeName = customerPolicies.mapNotNull { it.nominee.takeIf { n -> n.isNotBlank() } }.firstOrNull() ?: "Nominee Specified in Policy"
 
     Scaffold(
         topBar = {
@@ -761,7 +1436,7 @@ fun CustomerDetailScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "360° Customer CRM • $totalPoliciesCount Policies",
+                            text = "360° Customer Profile • $totalPoliciesCount Policies",
                             style = MaterialTheme.typography.labelSmall.copy(color = Color.White.copy(alpha = 0.85f))
                         )
                     }
@@ -772,522 +1447,786 @@ fun CustomerDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onEditCustomer, modifier = Modifier.testTag("edit_customer_button")) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Customer", tint = Color.White)
-                    }
-                    IconButton(
-                        onClick = {
-                            val shareSummary = buildString {
-                                appendLine("LIC 360° CRM PORTFOLIO SUMMARY")
-                                appendLine("Client Name: ${customer.name}")
-                                appendLine("Mobile: ${customer.mobile}")
-                                appendLine("WhatsApp: ${customer.whatsapp.ifEmpty { customer.mobile }}")
-                                appendLine("Email: ${customer.email.ifEmpty { "N/A" }}")
-                                appendLine("Total Policies: $totalPoliciesCount")
-                                appendLine("Total Premium: ₹${"%.0f".format(totalPremiumAmount)}")
-                                appendLine("Total Paid: ₹${"%.0f".format(totalPaidAmount)}")
-                                appendLine("Outstanding Balance: ₹${"%.0f".format(totalOutstandingBalance)}")
-                                appendLine("Next Due Date: $nextDueDate")
-                                if (lastPayment != null) {
-                                    appendLine("Last Payment: ₹${"%.0f".format(lastPayment.paidAmount)} on ${lastPayment.paymentDate}")
-                                }
-                            }
-                            val intent = Intent(Intent.ACTION_SEND).apply {
-                                putExtra(Intent.EXTRA_TEXT, shareSummary)
-                                type = "text/plain"
-                            }
-                            context.startActivity(Intent.createChooser(intent, "Share Customer Profile"))
+                    IconButton(onClick = {
+                        val shareSummary = buildString {
+                            appendLine("LIC CUSTOMER PROFILE - 360° CRM")
+                            appendLine("Name: ${customer.name}")
+                            appendLine("Mobile: ${customer.mobile}")
+                            appendLine("Total Policies: $totalPoliciesCount")
+                            appendLine("Active Policies: $activePoliciesCount")
+                            appendLine("Due Premium: ₹${"%.0f".format(duePremiumAmount)}")
+                            appendLine("Outstanding Balance: ₹${"%.0f".format(totalOutstandingBalance)}")
                         }
-                    ) {
-                        Icon(Icons.Default.Share, contentDescription = "Share Profile", tint = Color.White)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            putExtra(Intent.EXTRA_TEXT, shareSummary)
+                            type = "text/plain"
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Share Customer Profile"))
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Share", tint = Color.White)
                     }
-                    IconButton(onClick = { showDeleteConfirm = true }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Profile", tint = Color(0xFFFF8A80))
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More", tint = Color.White)
+                    }
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Edit Profile") },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = RoyalBluePrimary) },
+                            onClick = {
+                                showMoreMenu = false
+                                onEditCustomer()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Archive Client") },
+                            leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null, tint = AccentOrange) },
+                            onClick = {
+                                showMoreMenu = false
+                                Toast.makeText(context, "${customer.name} moved to archive.", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Delete Customer", color = ErrorRed) },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = ErrorRed) },
+                            onClick = {
+                                showMoreMenu = false
+                                showDeleteConfirm = true
+                            }
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = RoyalBluePrimary)
             )
-        },
-        bottomBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 12.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                val targetPolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) || it.status.equals("Due", ignoreCase = true) }
-                                    ?: customerPolicies.firstOrNull()
-                                policyForPaymentCollection = targetPolicy
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("record_payment_bottom_button")
-                        ) {
-                            Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Collect Payment", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-
-                        Button(
-                            onClick = onAddPolicyForCustomer,
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("add_policy_bottom_button")
-                        ) {
-                            Icon(Icons.Default.AddCard, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Add Policy", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-
-                        Button(
-                            onClick = {
-                                val firstDuePolicy = customerPolicies.firstOrNull { !it.status.equals("Paid-up", ignoreCase = true) }
-                                    ?: customerPolicies.firstOrNull()
-                                val reminderMsg = if (firstDuePolicy != null) {
-                                    viewModel.generatePremiumReminderMsg(
-                                        customerName = customer.name,
-                                        policyNo = firstDuePolicy.policyNumber,
-                                        planName = firstDuePolicy.planName,
-                                        amount = firstDuePolicy.premiumAmount,
-                                        dueDate = firstDuePolicy.dueDate
-                                    )
-                                } else {
-                                    "Dear ${customer.name}, greetings from your LIC Advisor ${agentProfile?.agentName ?: ""}."
-                                }
-                                launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, reminderMsg)
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp)
-                                .testTag("whatsapp_reminder_bottom_button")
-                        ) {
-                            Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Reminder", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { launchPhoneCall(context, customer.mobile) },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(40.dp)
-                        ) {
-                            Icon(Icons.Default.Call, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Call", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                generateAndShareCustomerPortfolioPdf(context, customer, customerPolicies, customerPayments)
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(40.dp)
-                        ) {
-                            Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp), tint = ErrorRed)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("PDF Report", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        OutlinedButton(
-                            onClick = onBack,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).height(40.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Back", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
         }
-    ) { padding ->
-        Column(
+    ) { paddingValues ->
+        LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .background(MaterialTheme.colorScheme.background)
+                .padding(paddingValues)
+                .background(MaterialTheme.colorScheme.background),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // ==========================================
-            // SECTION 1: CUSTOMER HEADER
-            // ==========================================
-            Surface(
-                color = RoyalBluePrimary,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        CustomerAvatarWithPhoto(customer = customer, size = 76.dp)
-                        Spacer(modifier = Modifier.width(16.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = customer.name,
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        fontSize = 20.sp
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                // Status Chip
-                                Surface(
-                                    color = when (overallStatus) {
-                                        "Overdue", "Lapsed" -> ErrorRed
-                                        "Due" -> AccentOrange
-                                        else -> EmeraldGreenSecondary
-                                    },
-                                    shape = RoundedCornerShape(10.dp)
+            // 1. PROFILE HEADER
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = RoyalBluePrimary),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // Large Circular Customer Photo
+                            CustomerAvatarWithPhoto(customer = customer, size = 80.dp)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = overallStatus,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                                        text = customer.name,
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            fontSize = 20.sp
+                                        ),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+
+                                    // Status Badge (Active / Inactive)
+                                    Surface(
+                                        color = if (activePoliciesCount > 0 || customerPolicies.isEmpty()) EmeraldGreenSecondary else Color.Gray,
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text(
+                                            text = if (activePoliciesCount > 0 || customerPolicies.isEmpty()) "Active" else "Inactive",
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Phone, contentDescription = null, tint = Color.White.copy(alpha = 0.9f), modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "+91 ${customer.mobile}",
+                                        style = MaterialTheme.typography.bodyMedium.copy(color = Color.White, fontWeight = FontWeight.SemiBold)
+                                    )
+                                }
+
+                                if (customer.occupation.isNotBlank()) {
+                                    Text(
+                                        text = "💼 ${customer.occupation}",
+                                        style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.85f))
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Call & WhatsApp Header Action Buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = { launchPhoneCall(context, customer.mobile) },
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = RoyalBluePrimary)
+                            ) {
+                                Icon(Icons.Default.Call, contentDescription = "Call", modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Call", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    val msg = "Hello ${customer.name}, greetings from your LIC Advisor!"
+                                    launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, msg)
+                                },
+                                modifier = Modifier.weight(1f).height(44.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary, contentColor = Color.White)
+                            ) {
+                                Icon(Icons.Default.Chat, contentDescription = "WhatsApp", modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("WhatsApp", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. SUMMARY CARDS (Total Policies, Active Policies, Due Premium, Outstanding Amount)
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Portfolio Summary",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Total Policies
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = RoyalBlueContainer),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(Icons.Default.Folder, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("$totalPoliciesCount", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                                Text("Total Policies", style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            }
+                        }
+
+                        // Active Policies
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = EmeraldGreenContainer),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("$activePoliciesCount", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = EmeraldGreenSecondary))
+                                Text("Active Policies", style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Due Premium
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = AccentOrangeContainer),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(Icons.Default.Event, contentDescription = null, tint = AccentOrange, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("₹${"%.0f".format(duePremiumAmount)}", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = AccentOrange, fontSize = 18.sp))
+                                Text("Due Premium", style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            }
+                        }
+
+                        // Outstanding Amount
+                        Card(
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = if (totalOutstandingBalance > 0) ErrorRedContainer else EmeraldGreenContainer),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Icon(
+                                    imageVector = if (totalOutstandingBalance > 0) Icons.Default.Warning else Icons.Default.Verified,
+                                    contentDescription = null,
+                                    tint = if (totalOutstandingBalance > 0) ErrorRed else EmeraldGreenSecondary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "₹${"%.0f".format(totalOutstandingBalance)}",
+                                    style = MaterialTheme.typography.titleLarge.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (totalOutstandingBalance > 0) ErrorRed else EmeraldGreenSecondary,
+                                        fontSize = 18.sp
+                                    )
+                                )
+                                Text("Outstanding Balance", style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. QUICK ACTIONS
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Quick Actions", style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Add Policy
+                            Button(
+                                onClick = onAddPolicyForCustomer,
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                                contentPadding = PaddingValues(horizontal = 4.dp)
+                            ) {
+                                Icon(Icons.Default.AddCard, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Add Policy", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Collect Premium
+                            Button(
+                                onClick = {
+                                    val targetPolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) || it.status.equals("Due", ignoreCase = true) }
+                                        ?: customerPolicies.firstOrNull()
+                                    policyForPaymentCollection = targetPolicy
+                                },
+                                modifier = Modifier.weight(1f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
+                                contentPadding = PaddingValues(horizontal = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Payments, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Collect", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+
+                            // Send WhatsApp Reminder
+                            Button(
+                                onClick = {
+                                    val firstDuePolicy = customerPolicies.firstOrNull { !it.status.equals("Paid-up", ignoreCase = true) }
+                                        ?: customerPolicies.firstOrNull()
+                                    val reminderMsg = if (firstDuePolicy != null) {
+                                        viewModel.generatePremiumReminderMsg(
+                                            customerName = customer.name,
+                                            policyNo = firstDuePolicy.policyNumber,
+                                            planName = firstDuePolicy.planName,
+                                            amount = firstDuePolicy.premiumAmount,
+                                            dueDate = firstDuePolicy.dueDate
+                                        )
+                                    } else {
+                                        "Dear ${customer.name}, greetings from your LIC Advisor ${agentProfile?.agentName ?: ""}."
+                                    }
+                                    launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, reminderMsg)
+                                },
+                                modifier = Modifier.weight(1.1f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                contentPadding = PaddingValues(horizontal = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("WA Reminder", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+
+                            // Call Customer
+                            OutlinedButton(
+                                onClick = { launchPhoneCall(context, customer.mobile) },
+                                modifier = Modifier.weight(0.9f).height(42.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBluePrimary),
+                                contentPadding = PaddingValues(horizontal = 4.dp)
+                            ) {
+                                Icon(Icons.Default.Phone, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Call", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 1: PERSONAL INFORMATION (Expandable Card)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isPersonalExpanded = !isPersonalExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Person, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("1. Personal Information", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                            }
+                            IconButton(onClick = { isPersonalExpanded = !isPersonalExpanded }) {
+                                Icon(
+                                    imageVector = if (isPersonalExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Toggle Section"
+                                )
+                            }
+                        }
+
+                        if (isPersonalExpanded) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            DetailItem("Date of Birth (DOB)", customer.dob.ifEmpty { "N/A" })
+                            DetailItem("Marriage Anniversary", customer.anniversary.ifEmpty { "N/A" })
+                            DetailItem("Residential Address", customer.address.ifEmpty { "N/A" })
+                            DetailItem("Occupation", customer.occupation.ifEmpty { "N/A" })
+                            DetailItem("Nominee Name", nomineeName)
+                            DetailItem("Nominee Relationship", "Family / Primary Nominee")
+                            DetailItem("Aadhaar Number", customer.aadhaar.ifEmpty { "N/A" })
+                            DetailItem("PAN Number", customer.pan.ifEmpty { "N/A" })
+
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                TextButton(onClick = onEditCustomer) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Edit Personal Details")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 2: POLICIES (Expandable Card)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isPoliciesExpanded = !isPoliciesExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.FolderSpecial, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("2. Policies (${customerPolicies.size})", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                            }
+                            IconButton(onClick = { isPoliciesExpanded = !isPoliciesExpanded }) {
+                                Icon(
+                                    imageVector = if (isPoliciesExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Toggle Section"
+                                )
+                            }
+                        }
+
+                        if (isPoliciesExpanded) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (customerPolicies.isEmpty()) {
+                                Text("No linked policies found. Tap below to add policy.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    customerPolicies.forEach { policy ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                            shape = RoundedCornerShape(14.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp)) {
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Text(policy.planName, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                                                    CustomerStatusBadge(status = policy.status)
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("Policy #: ${policy.policyNumber}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold))
+                                                    Text("Premium: ₹${"%.0f".format(policy.premiumAmount)}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                                                }
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text("Due Date: ${policy.dueDate}", style = MaterialTheme.typography.labelSmall.copy(color = AccentOrange, fontWeight = FontWeight.Bold))
+                                                    Text("Mode: ${policy.premiumMode}", style = MaterialTheme.typography.labelSmall)
+                                                }
+
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    OutlinedButton(
+                                                        onClick = { viewingPolicyDetail = policy },
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.weight(1f).height(34.dp),
+                                                        contentPadding = PaddingValues(2.dp)
+                                                    ) {
+                                                        Text("View", fontSize = 10.sp)
+                                                    }
+                                                    OutlinedButton(
+                                                        onClick = { editingPolicy = policy },
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.weight(1f).height(34.dp),
+                                                        contentPadding = PaddingValues(2.dp)
+                                                    ) {
+                                                        Text("Edit", fontSize = 10.sp)
+                                                    }
+                                                    Button(
+                                                        onClick = { policyForPaymentCollection = policy },
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
+                                                        modifier = Modifier.weight(1.2f).height(34.dp),
+                                                        contentPadding = PaddingValues(2.dp)
+                                                    ) {
+                                                        Text("Collect", fontSize = 10.sp)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = onAddPolicyForCustomer,
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Add New Policy")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 3: PAYMENT HISTORY (Expandable Card)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isPaymentsExpanded = !isPaymentsExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.History, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("3. Payment History (${customerPayments.size})", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                            }
+                            IconButton(onClick = { isPaymentsExpanded = !isPaymentsExpanded }) {
+                                Icon(
+                                    imageVector = if (isPaymentsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Toggle Section"
+                                )
+                            }
+                        }
+
+                        if (isPaymentsExpanded) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (customerPayments.isEmpty()) {
+                                Text("No payment transactions recorded yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    customerPayments.forEach { payment ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(12.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Column(modifier = Modifier.weight(1f)) {
+                                                    Text("₹${"%.0f".format(payment.paidAmount)}", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = EmeraldGreenSecondary)
+                                                    Text("Date: ${payment.paymentDate} • ${payment.paymentMode}", style = MaterialTheme.typography.bodySmall)
+                                                    Text("Receipt #: ${payment.receiptNumber}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                                Row {
+                                                    IconButton(onClick = { viewingReceiptPayment = payment }) {
+                                                        Icon(Icons.Default.Receipt, contentDescription = "Receipt", tint = RoyalBluePrimary)
+                                                    }
+                                                    IconButton(onClick = { editingPayment = payment }) {
+                                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 4: DOCUMENTS (Aadhaar, PAN, Policy Documents, Nominee Documents)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isDocumentsExpanded = !isDocumentsExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.FolderShared, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("4. Documents Vault (${customerDocs.size})", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                            }
+                            IconButton(onClick = { isDocumentsExpanded = !isDocumentsExpanded }) {
+                                Icon(
+                                    imageVector = if (isDocumentsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Toggle Section"
+                                )
+                            }
+                        }
+
+                        if (isDocumentsExpanded) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            val requiredDocTypes = listOf("Aadhaar Card", "PAN Card", "Policy Documents", "Nominee Documents")
+
+                            requiredDocTypes.forEach { docType ->
+                                val matchingDoc = customerDocs.firstOrNull {
+                                    it.docType.contains(docType.replace(" Card", "").replace(" Documents", ""), ignoreCase = true)
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                        Icon(
+                                            imageVector = when (docType) {
+                                                "Aadhaar Card" -> Icons.Default.Badge
+                                                "PAN Card" -> Icons.Default.CreditCard
+                                                "Policy Documents" -> Icons.Default.Description
+                                                else -> Icons.Default.FolderShared
+                                            },
+                                            contentDescription = null,
+                                            tint = RoyalBluePrimary,
+                                            modifier = Modifier.size(22.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column {
+                                            Text(docType, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text(
+                                                text = matchingDoc?.title ?: "Status: Pending Scan",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (matchingDoc != null) EmeraldGreenSecondary else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    if (matchingDoc != null) {
+                                        Row {
+                                            IconButton(onClick = {
+                                                val shareText = "Document: ${matchingDoc.title}\nClient: ${customer.name}"
+                                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                                    putExtra(Intent.EXTRA_TEXT, shareText)
+                                                    type = "text/plain"
+                                                }
+                                                context.startActivity(Intent.createChooser(intent, "Share Document"))
+                                            }) {
+                                                Icon(Icons.Default.Share, contentDescription = "Share", tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
+                                            }
+                                            IconButton(onClick = { viewModel.deleteDocument(matchingDoc) }) {
+                                                Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ErrorRed, modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    } else {
+                                        OutlinedButton(
+                                            onClick = { showAddDocDialog = true },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("+ Upload", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = { showAddDocDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                            ) {
+                                Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Upload New Document")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // SECTION 5: NOTES (Agent Notes)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().animateContentSize(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isNotesExpanded = !isNotesExpanded },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Notes, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(22.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text("5. Agent Notes", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
+                            }
+                            IconButton(onClick = { isNotesExpanded = !isNotesExpanded }) {
+                                Icon(
+                                    imageVector = if (isNotesExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = "Toggle Section"
+                                )
+                            }
+                        }
+
+                        if (isNotesExpanded) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            if (customer.notes.isBlank()) {
+                                Text(
+                                    text = "No agent notes recorded yet. Tap below to add client notes or follow-up remarks.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = customer.notes,
+                                        modifier = Modifier.padding(12.dp),
+                                        style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
                             }
 
-                            if (customer.occupation.isNotBlank()) {
-                                Text(
-                                    text = "💼 ${customer.occupation}",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.9f))
-                                )
-                            }
-                            Text(
-                                text = "📱 Mobile: +91 ${customer.mobile}",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = Color.White.copy(alpha = 0.95f),
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            )
-                            if (customer.whatsapp.isNotBlank()) {
-                                Text(
-                                    text = "💬 WhatsApp: +91 ${customer.whatsapp}",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.9f))
-                                )
-                            }
-                            if (customer.email.isNotBlank()) {
-                                Text(
-                                    text = "📧 ${customer.email}",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.85f))
-                                )
-                            }
-                            if (customer.address.isNotBlank()) {
-                                Text(
-                                    text = "🏠 ${customer.address}",
-                                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White.copy(alpha = 0.85f)),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = { showAddNoteDialog = true },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                            ) {
+                                Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Add / Edit Agent Notes")
                             }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Quick Actions Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable { launchPhoneCall(context, customer.mobile) }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                Text("Call", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable {
-                                val msg = "Hello ${customer.name}, regarding your LIC policy requirements..."
-                                launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, msg)
-                            }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Send, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(18.dp))
-                                Text("WhatsApp", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable {
-                                launchSMS(context, customer.mobile, "Dear ${customer.name}, LIC Policy update from your advisor.")
-                            }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Sms, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                Text("SMS", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable {
-                                val shareText = "LIC Client: ${customer.name}\nMobile: ${customer.mobile}\nPolicies: $totalPoliciesCount\nOutstanding: ₹${totalOutstandingBalance.toInt()}"
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    putExtra(Intent.EXTRA_TEXT, shareText)
-                                    type = "text/plain"
-                                }
-                                context.startActivity(Intent.createChooser(intent, "Share Customer"))
-                            }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Share, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                Text("Share", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable { onEditCustomer() }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                                Text("Edit", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(6.dp))
-
-                        Surface(
-                            color = Color.White.copy(alpha = 0.15f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).clickable { showDeleteConfirm = true }
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(18.dp))
-                                Text("Delete", fontSize = 10.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            }
-
-            // ==========================================
-            // SECTION 2: CUSTOMER SUMMARY CARDS
-            // ==========================================
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item {
-                    QuickMetricCard(
-                        title = "Total Policies",
-                        value = "$totalPoliciesCount",
-                        icon = Icons.Default.Folder,
-                        color = RoyalBluePrimary,
-                        bgColor = RoyalBlueContainer
-                    )
-                }
-                item {
-                    QuickMetricCard(
-                        title = "Total Premium",
-                        value = "₹${"%.0f".format(totalPremiumAmount)}",
-                        icon = Icons.Default.Payments,
-                        color = RoyalBluePrimary,
-                        bgColor = RoyalBlueContainer
-                    )
-                }
-                item {
-                    QuickMetricCard(
-                        title = "Total Paid",
-                        value = "₹${"%.0f".format(totalPaidAmount)}",
-                        icon = Icons.Default.CheckCircle,
-                        color = EmeraldGreenSecondary,
-                        bgColor = EmeraldGreenContainer
-                    )
-                }
-                item {
-                    QuickMetricCard(
-                        title = "Outstanding Balance",
-                        value = "₹${"%.0f".format(totalOutstandingBalance)}",
-                        icon = Icons.Default.Warning,
-                        color = if (totalOutstandingBalance > 0) ErrorRed else EmeraldGreenSecondary,
-                        bgColor = if (totalOutstandingBalance > 0) ErrorRedContainer else EmeraldGreenContainer
-                    )
-                }
-                item {
-                    QuickMetricCard(
-                        title = "Next Due Date",
-                        value = nextDueDate,
-                        icon = Icons.Default.Event,
-                        color = AccentOrange,
-                        bgColor = AccentOrangeContainer
-                    )
-                }
-                item {
-                    QuickMetricCard(
-                        title = "Last Payment Date",
-                        value = lastPayment?.let { "₹${it.paidAmount.toInt()} (${it.paymentDate})" } ?: "None",
-                        icon = Icons.Default.History,
-                        color = EmeraldGreenSecondary,
-                        bgColor = EmeraldGreenContainer
-                    )
-                }
-            }
-
-            // NAVIGATION TABS
-            ScrollableTabRow(
-                selectedTabIndex = selectedTabIndex,
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentColor = RoyalBluePrimary,
-                edgePadding = 16.dp,
-                divider = { HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant) }
-            ) {
-                tabs.forEachIndexed { index, title ->
-                    Tab(
-                        selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
-                        text = {
-                            Text(
-                                text = title,
-                                fontWeight = if (selectedTabIndex == index) FontWeight.Bold else FontWeight.Medium,
-                                fontSize = 13.sp
-                            )
-                        }
-                    )
-                }
-            }
-
-            // TAB CONTENT AREA
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                when (selectedTabIndex) {
-                    0 -> CustomerPoliciesTab(
-                        policies = customerPolicies,
-                        payments = customerPayments,
-                        onAddPolicy = onAddPolicyForCustomer,
-                        onViewDetail = { viewingPolicyDetail = it },
-                        onRecordPayment = { policyForPaymentCollection = it },
-                        onEditPolicy = { editingPolicy = it },
-                        onDeletePolicy = { deletingPolicy = it }
-                    )
-                    1 -> CustomerPaymentHistoryTab(
-                        payments = customerPayments,
-                        policies = customerPolicies,
-                        agentName = agentProfile?.agentName ?: "LIC Advisor",
-                        agencyCode = agentProfile?.agencyCode ?: "",
-                        branchName = agentProfile?.branchName ?: "",
-                        onRecordPayment = {
-                            val targetPolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) || it.status.equals("Due", ignoreCase = true) }
-                                ?: customerPolicies.firstOrNull()
-                            policyForPaymentCollection = targetPolicy
-                        },
-                        onViewReceipt = { viewingReceiptPayment = it },
-                        onEditPayment = { editingPayment = it },
-                        onDeletePayment = { deletingPayment = it }
-                    )
-                    2 -> CustomerDocumentsTab(
-                        customer = customer,
-                        documents = customerDocs,
-                        onUploadClick = { showAddDocDialog = true },
-                        onDeleteDoc = { viewModel.deleteDocument(it) }
-                    )
-                    3 -> CustomerRemindersTab(
-                        customer = customer,
-                        policies = customerPolicies,
-                        payments = customerPayments,
-                        followUps = customerFollowUps,
-                        onCall = { launchPhoneCall(context, customer.mobile) },
-                        onWhatsApp = { msg -> launchWhatsAppMessage(context, customer.whatsapp.ifEmpty { customer.mobile }, msg) },
-                        onCollectPayment = { policy -> policyForPaymentCollection = policy },
-                        onNewFollowUp = {
-                            followUpToEdit = null
-                            showFollowUpDialog = true
-                        },
-                        onEditFollowUp = { fu ->
-                            followUpToEdit = fu
-                            showFollowUpDialog = true
-                        },
-                        onToggleFollowUp = { fu ->
-                            val newStatus = if (fu.status.equals("Completed", ignoreCase = true)) "Pending" else "Completed"
-                            viewModel.updateFollowUp(fu.copy(status = newStatus))
-                        },
-                        onDeleteFollowUp = { fu -> viewModel.deleteFollowUp(fu) }
-                    )
-                    4 -> CustomerNotesTab(
-                        customer = customer,
-                        onAddNoteClick = { showAddNoteDialog = true },
-                        onUpdateNotes = { updatedNotes ->
-                            viewModel.updateCustomer(customer.copy(notes = updatedNotes))
-                        }
-                    )
-                    5 -> CustomerPersonalDetailsTab(
-                        customer = customer,
-                        onEditClick = onEditCustomer,
-                        onDeleteClick = { showDeleteConfirm = true }
-                    )
                 }
             }
         }
@@ -3187,66 +4126,54 @@ fun AddEditCustomerDialog(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
-                                    // Circular Avatar with Photo
+                                    // Circular Avatar with Clean Photo & Premium Border
                                     Box(
                                         modifier = Modifier
                                             .size(96.dp)
                                             .clip(CircleShape)
                                             .border(2.5.dp, RoyalBluePrimary, CircleShape)
-                                            .background(RoyalBlueContainer)
-                                            .clickable { showPhotoSourceDialog = true },
+                                            .background(RoyalBlueContainer),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        when {
-                                            selectedBitmap != null -> {
-                                                Image(
-                                                    bitmap = selectedBitmap!!.asImageBitmap(),
-                                                    contentDescription = "Selected Photo",
-                                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                    contentScale = ContentScale.Crop
-                                                )
+                                        Crossfade(
+                                            targetState = Triple(selectedBitmap, selectedImageUri, photoUri),
+                                            animationSpec = androidx.compose.animation.core.tween(durationMillis = 350),
+                                            label = "ClientPhotoCrossfade"
+                                        ) { (bitmap, uri, photoUrl) ->
+                                            when {
+                                                bitmap != null -> {
+                                                    Image(
+                                                        bitmap = bitmap.asImageBitmap(),
+                                                        contentDescription = "Selected Photo",
+                                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                }
+                                                uri != null -> {
+                                                    coil.compose.AsyncImage(
+                                                        model = uri,
+                                                        contentDescription = "Selected Photo",
+                                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                }
+                                                photoUrl.isNotBlank() -> {
+                                                    coil.compose.AsyncImage(
+                                                        model = photoUrl,
+                                                        contentDescription = "Customer Photo",
+                                                        modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                                        contentScale = ContentScale.Crop
+                                                    )
+                                                }
+                                                else -> {
+                                                    CustomerAvatar(
+                                                        name = name.ifBlank { "Client" },
+                                                        size = 96.dp,
+                                                        backgroundColor = RoyalBlueContainer,
+                                                        textColor = RoyalBluePrimary
+                                                    )
+                                                }
                                             }
-                                            selectedImageUri != null -> {
-                                                coil.compose.AsyncImage(
-                                                    model = selectedImageUri,
-                                                    contentDescription = "Selected Photo",
-                                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                    contentScale = ContentScale.Crop
-                                                )
-                                            }
-                                            photoUri.isNotBlank() -> {
-                                                coil.compose.AsyncImage(
-                                                    model = photoUri,
-                                                    contentDescription = "Customer Photo",
-                                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                                                    contentScale = ContentScale.Crop
-                                                )
-                                            }
-                                            else -> {
-                                                CustomerAvatar(
-                                                    name = name.ifBlank { "Client" },
-                                                    size = 96.dp,
-                                                    backgroundColor = RoyalBlueContainer,
-                                                    textColor = RoyalBluePrimary
-                                                )
-                                            }
-                                        }
-
-                                        // Camera Overlay Icon
-                                        Box(
-                                            modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .size(28.dp)
-                                                .clip(CircleShape)
-                                                .background(RoyalBluePrimary),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Icon(
-                                                Icons.Default.CameraAlt,
-                                                contentDescription = "Upload Photo",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
                                         }
                                     }
 

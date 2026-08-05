@@ -104,7 +104,7 @@ class FirebaseSyncManager(private val context: Context) {
     // Agent Root Reference in Firestore: agents/{uid}
     private fun agentDocRef(uid: String) = firestore?.collection("agents")?.document(uid)
 
-    // Save Agent Profile in Cloud
+    // Save Agent Profile / Settings in Cloud
     suspend fun backupAgentProfile(providedUid: String, profile: AgentProfileEntity) {
         val uid = getOrEnsureUid(providedUid)
         val tag = "FirestoreSync"
@@ -115,25 +115,33 @@ class FirebaseSyncManager(private val context: Context) {
             _syncStatus.value = SyncStatus.Syncing
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null. Verify google-services.json and Firebase initialization.")
             val data = mapOf(
-                "id" to profile.id,
+                "id" to uid,
+                "uid" to uid,
                 "agentName" to profile.agentName,
                 "agencyCode" to profile.agencyCode,
+                "branchCode" to profile.branchCode,
                 "branchName" to profile.branchName,
                 "licenseNumber" to profile.licenseNumber,
                 "email" to profile.email,
                 "mobile" to profile.mobile,
                 "photoUri" to profile.photoUri,
                 "themeMode" to profile.themeMode,
+                "isDarkMode" to profile.isDarkMode,
                 "pinCode" to profile.pinCode,
+                "isBiometricEnabled" to profile.isBiometricEnabled,
                 "autoLogoutMinutes" to profile.autoLogoutMinutes,
+                "isAutoSyncEnabled" to profile.isAutoSyncEnabled,
+                "lastSyncedTime" to profile.lastSyncedTime,
                 "updatedAt" to System.currentTimeMillis()
             )
-            Log.d(tag, "Payload map for Agent Profile: $data")
+            Log.d(tag, "Payload map for Agent Profile / Settings: $data")
 
             dbInstance.collection("agents").document(uid)
                 .set(data, SetOptions.merge()).await()
+            dbInstance.collection("settings").document(uid)
+                .set(data, SetOptions.merge()).await()
 
-            Log.i(tag, "SUCCESS: Agent Profile uploaded to Firestore at path: $docPath")
+            Log.i(tag, "SUCCESS: Agent Profile uploaded to Firestore at path: $docPath & settings/$uid")
             val time = getCurrentTimeFormatted()
             _syncStatus.value = SyncStatus.Synced(time)
         } catch (e: Throwable) {
@@ -146,18 +154,19 @@ class FirebaseSyncManager(private val context: Context) {
         }
     }
 
-    // Customer Backup
+    // Customer / Client Backup
     suspend fun backupCustomer(providedUid: String, customer: CustomerEntity) {
         val uid = getOrEnsureUid(providedUid)
         val tag = "FirestoreSync"
         val docPath = "agents/$uid/customers/${customer.id}"
-        Log.d(tag, "Attempting Firestore upload for Customer ID: ${customer.id}, Name: '${customer.name}', Target Path: $docPath")
+        Log.d(tag, "Attempting Firestore upload for Customer/Client ID: ${customer.id}, Name: '${customer.name}', Target Path: $docPath")
 
         try {
             _syncStatus.value = SyncStatus.Syncing
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null. Verify google-services.json and Firebase initialization.")
             val data = mapOf(
                 "id" to customer.id,
+                "clientId" to customer.id.toString(),
                 "name" to customer.name,
                 "mobile" to customer.mobile,
                 "whatsapp" to customer.whatsapp,
@@ -178,8 +187,10 @@ class FirebaseSyncManager(private val context: Context) {
             dbInstance.collection("agents").document(uid)
                 .collection("customers").document(customer.id.toString())
                 .set(data, SetOptions.merge()).await()
+            dbInstance.collection("clients").document(customer.id.toString())
+                .set(data, SetOptions.merge()).await()
 
-            Log.i(tag, "SUCCESS: Customer ID ${customer.id} ('${customer.name}') uploaded to Firestore at path: $docPath")
+            Log.i(tag, "SUCCESS: Customer ID ${customer.id} ('${customer.name}') uploaded to Firestore at path: $docPath & clients/${customer.id}")
             _syncStatus.value = SyncStatus.Synced(getCurrentTimeFormatted())
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Customer ID ${customer.id} ('${customer.name}') upload to Firestore failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
@@ -199,7 +210,8 @@ class FirebaseSyncManager(private val context: Context) {
         try {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
             dbInstance.collection("agents").document(uid).collection("customers").document(customerId.toString()).delete().await()
-            Log.i(tag, "SUCCESS: Deleted Customer ID $customerId from Firestore at path: $docPath")
+            dbInstance.collection("clients").document(customerId.toString()).delete().await()
+            Log.i(tag, "SUCCESS: Deleted Customer ID $customerId from Firestore at path: $docPath & clients/$customerId")
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Customer ID $customerId deletion failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
         }
@@ -217,9 +229,12 @@ class FirebaseSyncManager(private val context: Context) {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
             val data = mapOf(
                 "id" to policy.id,
+                "policyId" to policy.id.toString(),
                 "policyNumber" to policy.policyNumber,
                 "customerId" to policy.customerId,
+                "clientId" to policy.customerId.toString(),
                 "customerName" to policy.customerName,
+                "clientName" to policy.customerName,
                 "planName" to policy.planName,
                 "premiumAmount" to policy.premiumAmount,
                 "sumAssured" to policy.sumAssured,
@@ -240,8 +255,10 @@ class FirebaseSyncManager(private val context: Context) {
             dbInstance.collection("agents").document(uid)
                 .collection("policies").document(policy.id.toString())
                 .set(data, SetOptions.merge()).await()
+            dbInstance.collection("policies").document(policy.id.toString())
+                .set(data, SetOptions.merge()).await()
 
-            Log.i(tag, "SUCCESS: Policy ID ${policy.id} (${policy.policyNumber}) uploaded to Firestore at path: $docPath")
+            Log.i(tag, "SUCCESS: Policy ID ${policy.id} (${policy.policyNumber}) uploaded to Firestore at path: $docPath & policies/${policy.id}")
             _syncStatus.value = SyncStatus.Synced(getCurrentTimeFormatted())
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Policy ID ${policy.id} (${policy.policyNumber}) upload to Firestore failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
@@ -261,7 +278,8 @@ class FirebaseSyncManager(private val context: Context) {
         try {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
             dbInstance.collection("agents").document(uid).collection("policies").document(policyId.toString()).delete().await()
-            Log.i(tag, "SUCCESS: Deleted Policy ID $policyId from Firestore at path: $docPath")
+            dbInstance.collection("policies").document(policyId.toString()).delete().await()
+            Log.i(tag, "SUCCESS: Deleted Policy ID $policyId from Firestore at path: $docPath & policies/$policyId")
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Policy ID $policyId deletion failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
         }
@@ -279,15 +297,21 @@ class FirebaseSyncManager(private val context: Context) {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
             val data = mapOf(
                 "id" to payment.id,
+                "paymentId" to payment.id.toString(),
                 "policyId" to payment.policyId,
                 "policyNumber" to payment.policyNumber,
                 "customerId" to payment.customerId,
+                "clientId" to payment.customerId.toString(),
                 "customerName" to payment.customerName,
+                "clientName" to payment.customerName,
                 "paidAmount" to payment.paidAmount,
+                "amount" to payment.paidAmount,
                 "lateFee" to payment.lateFee,
                 "paymentDate" to payment.paymentDate,
                 "paymentMode" to payment.paymentMode,
+                "mode" to payment.paymentMode,
                 "receiptNumber" to payment.receiptNumber,
+                "collectedBy" to "Agent",
                 "notes" to payment.notes,
                 "createdAt" to payment.createdAt,
                 "updatedAt" to System.currentTimeMillis()
@@ -297,8 +321,10 @@ class FirebaseSyncManager(private val context: Context) {
             dbInstance.collection("agents").document(uid)
                 .collection("payments").document(payment.id.toString())
                 .set(data, SetOptions.merge()).await()
+            dbInstance.collection("payments").document(payment.id.toString())
+                .set(data, SetOptions.merge()).await()
 
-            Log.i(tag, "SUCCESS: Payment ID ${payment.id} uploaded to Firestore at path: $docPath")
+            Log.i(tag, "SUCCESS: Payment ID ${payment.id} uploaded to Firestore at path: $docPath & payments/${payment.id}")
             _syncStatus.value = SyncStatus.Synced(getCurrentTimeFormatted())
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Payment ID ${payment.id} upload to Firestore failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
@@ -318,7 +344,8 @@ class FirebaseSyncManager(private val context: Context) {
         try {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
             dbInstance.collection("agents").document(uid).collection("payments").document(paymentId.toString()).delete().await()
-            Log.i(tag, "SUCCESS: Deleted Payment ID $paymentId from Firestore at path: $docPath")
+            dbInstance.collection("payments").document(paymentId.toString()).delete().await()
+            Log.i(tag, "SUCCESS: Deleted Payment ID $paymentId from Firestore at path: $docPath & payments/$paymentId")
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Payment ID $paymentId deletion failed at path $docPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
         }
@@ -379,7 +406,7 @@ class FirebaseSyncManager(private val context: Context) {
         }
     }
 
-    // Reminders Backup: Computes and writes reminders to agents/{uid}/reminders collection
+    // Reminders Backup: Computes and writes reminders to agents/{uid}/reminders & reminders/ collection
     suspend fun backupReminders(providedUid: String, db: AppDatabase) {
         val uid = getOrEnsureUid(providedUid)
         val tag = "FirestoreSync"
@@ -391,7 +418,8 @@ class FirebaseSyncManager(private val context: Context) {
             val policies = db.policyDao().getAllPoliciesSync()
             val customers = db.customerDao().getAllCustomersSync()
 
-            val remindersCollection = dbInstance.collection("agents").document(uid).collection("reminders")
+            val remindersSubCol = dbInstance.collection("agents").document(uid).collection("reminders")
+            val remindersTopCol = dbInstance.collection("reminders")
 
             // 1. Premium Due Reminders
             policies.forEach { p ->
@@ -400,16 +428,20 @@ class FirebaseSyncManager(private val context: Context) {
                     val reminderId = "due_policy_${p.id}"
                     val data = mapOf(
                         "id" to reminderId,
+                        "reminderId" to reminderId,
                         "type" to "PREMIUM_DUE",
                         "title" to "Premium Due: ${p.policyNumber}",
                         "message" to "Premium ₹${p.premiumAmount} due on ${p.dueDate} for ${p.customerName}",
                         "policyNumber" to p.policyNumber,
                         "customerName" to p.customerName,
+                        "clientName" to p.customerName,
                         "dueDate" to p.dueDate,
                         "amount" to p.premiumAmount,
+                        "status" to "Pending",
                         "updatedAt" to System.currentTimeMillis()
                     )
-                    remindersCollection.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersSubCol.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersTopCol.document(reminderId).set(data, SetOptions.merge()).await()
                 }
             }
 
@@ -419,15 +451,19 @@ class FirebaseSyncManager(private val context: Context) {
                     val reminderId = "birthday_cust_${c.id}"
                     val data = mapOf(
                         "id" to reminderId,
+                        "reminderId" to reminderId,
                         "type" to "BIRTHDAY",
                         "title" to "Birthday Reminder: ${c.name}",
                         "message" to "Birthday on ${c.dob} for ${c.name} (${c.mobile})",
                         "customerName" to c.name,
+                        "clientName" to c.name,
                         "customerMobile" to c.mobile,
                         "dob" to c.dob,
+                        "status" to "Pending",
                         "updatedAt" to System.currentTimeMillis()
                     )
-                    remindersCollection.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersSubCol.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersTopCol.document(reminderId).set(data, SetOptions.merge()).await()
                 }
             }
 
@@ -437,15 +473,19 @@ class FirebaseSyncManager(private val context: Context) {
                     val reminderId = "anniversary_cust_${c.id}"
                     val data = mapOf(
                         "id" to reminderId,
+                        "reminderId" to reminderId,
                         "type" to "ANNIVERSARY",
                         "title" to "Anniversary Reminder: ${c.name}",
                         "message" to "Anniversary on ${c.anniversary} for ${c.name} (${c.mobile})",
                         "customerName" to c.name,
+                        "clientName" to c.name,
                         "customerMobile" to c.mobile,
                         "anniversary" to c.anniversary,
+                        "status" to "Pending",
                         "updatedAt" to System.currentTimeMillis()
                     )
-                    remindersCollection.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersSubCol.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersTopCol.document(reminderId).set(data, SetOptions.merge()).await()
                 }
             }
 
@@ -456,20 +496,24 @@ class FirebaseSyncManager(private val context: Context) {
                     val reminderId = "maturity_policy_${p.id}"
                     val data = mapOf(
                         "id" to reminderId,
+                        "reminderId" to reminderId,
                         "type" to "MATURITY",
                         "title" to "Policy Maturity: ${p.policyNumber}",
                         "message" to "Policy ${p.policyNumber} maturing on ${p.maturityDate} (Sum Assured: ₹${p.sumAssured})",
                         "policyNumber" to p.policyNumber,
                         "customerName" to p.customerName,
+                        "clientName" to p.customerName,
                         "maturityDate" to p.maturityDate,
                         "sumAssured" to p.sumAssured,
+                        "status" to "Pending",
                         "updatedAt" to System.currentTimeMillis()
                     )
-                    remindersCollection.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersSubCol.document(reminderId).set(data, SetOptions.merge()).await()
+                    remindersTopCol.document(reminderId).set(data, SetOptions.merge()).await()
                 }
             }
 
-            Log.i(tag, "SUCCESS: Reminders snapshot written to Firestore at path: $colPath")
+            Log.i(tag, "SUCCESS: Reminders snapshot written to Firestore at path: $colPath & reminders/")
         } catch (e: Throwable) {
             Log.e(tag, "FAILED: Reminders upload failed at path $colPath. Exception type: ${e.javaClass.simpleName}, Message: ${e.message}", e)
         }

@@ -28,12 +28,17 @@ import com.example.data.local.CustomerEntity
 import com.example.data.local.PolicyEntity
 import com.example.ui.LicViewModel
 import com.example.ui.auth.*
+import com.example.ui.calendar.CalendarScreen
 import com.example.ui.customer.*
 import com.example.ui.dashboard.DashboardScreen
 import com.example.ui.documents.DocumentListScreen
+import com.example.ui.documents.DocumentVaultScreen
 import com.example.ui.payment.PaymentCollectionDialog
 import com.example.ui.payment.PaymentHistoryScreen
+import com.example.ui.payment.PrintPreviewScreen
+import com.example.ui.payment.ReceiptScreen
 import com.example.ui.policy.*
+import com.example.ui.reminders.ReminderCenterScreen
 import com.example.ui.reminders.ReminderListScreen
 import com.example.ui.reports.ReportScreen
 import com.example.ui.settings.SettingsScreen
@@ -143,10 +148,12 @@ sealed class ScreenDestination {
     object Policies : ScreenDestination()
     data class PolicyDetail(val policy: PolicyEntity) : ScreenDestination()
     object Reminders : ScreenDestination()
+    object Calendar : ScreenDestination()
     object Payments : ScreenDestination()
     object Reports : ScreenDestination()
     object Documents : ScreenDestination()
     object Settings : ScreenDestination()
+    object AddPolicy : ScreenDestination()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -155,7 +162,9 @@ fun MainAppContent(
     licViewModel: LicViewModel,
     authViewModel: AuthViewModel
 ) {
-    val backStack = remember { mutableStateListOf<ScreenDestination>(ScreenDestination.Dashboard) }
+    val customersList by licViewModel.customers.collectAsState()
+    val initialScreen = ScreenDestination.Dashboard
+    val backStack = remember { mutableStateListOf<ScreenDestination>(initialScreen) }
     val currentDestination = backStack.lastOrNull() ?: ScreenDestination.Dashboard
 
     fun navigateTo(destination: ScreenDestination) {
@@ -184,8 +193,8 @@ fun MainAppContent(
     val currentTab = when (currentDestination) {
         ScreenDestination.Dashboard -> AppNavigationTab.DASHBOARD
         ScreenDestination.Customers, is ScreenDestination.CustomerDetail -> AppNavigationTab.CUSTOMERS
-        ScreenDestination.Policies, is ScreenDestination.PolicyDetail -> AppNavigationTab.POLICIES
-        ScreenDestination.Reminders -> AppNavigationTab.REMINDERS
+        ScreenDestination.Policies, is ScreenDestination.PolicyDetail, ScreenDestination.AddPolicy -> AppNavigationTab.POLICIES
+        ScreenDestination.Reminders, ScreenDestination.Calendar -> AppNavigationTab.REMINDERS
         ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
         ScreenDestination.Reports -> AppNavigationTab.REPORTS
         ScreenDestination.Documents -> AppNavigationTab.DOCUMENTS
@@ -209,7 +218,9 @@ fun MainAppContent(
         topBar = {
             if (currentDestination != ScreenDestination.Dashboard &&
                 currentDestination !is ScreenDestination.CustomerDetail &&
-                currentDestination !is ScreenDestination.PolicyDetail
+                currentDestination !is ScreenDestination.PolicyDetail &&
+                currentDestination != ScreenDestination.Payments &&
+                currentDestination != ScreenDestination.AddPolicy
             ) {
                 TopAppBar(
                     title = {
@@ -248,87 +259,89 @@ fun MainAppContent(
             }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = RoyalBluePrimary,
-                contentColor = Color.White
-            ) {
-                NavigationBarItem(
-                    selected = currentTab == AppNavigationTab.DASHBOARD,
-                    onClick = { navigateTo(ScreenDestination.Dashboard) },
-                    icon = { Icon(Icons.Default.Dashboard, contentDescription = "Home") },
-                    label = { Text("Home") },
-                    modifier = Modifier.testTag("nav_tab_dashboard"),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RoyalBluePrimary,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                        unselectedTextColor = Color.White.copy(alpha = 0.75f)
+            if (currentDestination != ScreenDestination.AddPolicy) {
+                NavigationBar(
+                    containerColor = RoyalBluePrimary,
+                    contentColor = Color.White
+                ) {
+                    NavigationBarItem(
+                        selected = currentTab == AppNavigationTab.DASHBOARD,
+                        onClick = { navigateTo(ScreenDestination.Dashboard) },
+                        icon = { Icon(Icons.Default.Dashboard, contentDescription = "Home") },
+                        label = { Text("Home") },
+                        modifier = Modifier.testTag("nav_tab_dashboard"),
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RoyalBluePrimary,
+                            selectedTextColor = AccentOrange,
+                            indicatorColor = Color.White,
+                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
+                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                        )
                     )
-                )
 
-                NavigationBarItem(
-                    selected = currentTab == AppNavigationTab.CUSTOMERS,
-                    onClick = { navigateTo(ScreenDestination.Customers) },
-                    icon = { Icon(Icons.Default.People, contentDescription = "Customers") },
-                    label = { Text("Clients") },
-                    modifier = Modifier.testTag("nav_tab_customers"),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RoyalBluePrimary,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                        unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                    NavigationBarItem(
+                        selected = currentTab == AppNavigationTab.CUSTOMERS,
+                        onClick = { navigateTo(ScreenDestination.Customers) },
+                        icon = { Icon(Icons.Default.People, contentDescription = "Customers") },
+                        label = { Text("Clients") },
+                        modifier = Modifier.testTag("nav_tab_customers"),
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RoyalBluePrimary,
+                            selectedTextColor = AccentOrange,
+                            indicatorColor = Color.White,
+                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
+                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                        )
                     )
-                )
 
-                NavigationBarItem(
-                    selected = currentTab == AppNavigationTab.POLICIES,
-                    onClick = { navigateTo(ScreenDestination.Policies) },
-                    icon = { Icon(Icons.Default.FolderSpecial, contentDescription = "Policies") },
-                    label = { Text("Policies") },
-                    modifier = Modifier.testTag("nav_tab_policies"),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RoyalBluePrimary,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                        unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                    NavigationBarItem(
+                        selected = currentTab == AppNavigationTab.POLICIES,
+                        onClick = { navigateTo(ScreenDestination.Policies) },
+                        icon = { Icon(Icons.Default.FolderSpecial, contentDescription = "Policies") },
+                        label = { Text("Policies") },
+                        modifier = Modifier.testTag("nav_tab_policies"),
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RoyalBluePrimary,
+                            selectedTextColor = AccentOrange,
+                            indicatorColor = Color.White,
+                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
+                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                        )
                     )
-                )
 
-                NavigationBarItem(
-                    selected = currentTab == AppNavigationTab.REMINDERS,
-                    onClick = { navigateTo(ScreenDestination.Reminders) },
-                    icon = { Icon(Icons.Default.NotificationsActive, contentDescription = "Reminders") },
-                    label = { Text("Reminders") },
-                    modifier = Modifier.testTag("nav_tab_reminders"),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RoyalBluePrimary,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                        unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                    NavigationBarItem(
+                        selected = currentTab == AppNavigationTab.REMINDERS,
+                        onClick = { navigateTo(ScreenDestination.Reminders) },
+                        icon = { Icon(Icons.Default.NotificationsActive, contentDescription = "Reminders") },
+                        label = { Text("Reminders") },
+                        modifier = Modifier.testTag("nav_tab_reminders"),
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RoyalBluePrimary,
+                            selectedTextColor = AccentOrange,
+                            indicatorColor = Color.White,
+                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
+                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                        )
                     )
-                )
 
-                NavigationBarItem(
-                    selected = currentTab == AppNavigationTab.SETTINGS ||
-                            currentTab == AppNavigationTab.REPORTS ||
-                            currentTab == AppNavigationTab.DOCUMENTS ||
-                            currentTab == AppNavigationTab.PAYMENTS,
-                    onClick = { navigateTo(ScreenDestination.Settings) },
-                    icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More") },
-                    label = { Text("More") },
-                    modifier = Modifier.testTag("nav_tab_more"),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = RoyalBluePrimary,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color.White,
-                        unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                        unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                    NavigationBarItem(
+                        selected = currentTab == AppNavigationTab.SETTINGS ||
+                                currentTab == AppNavigationTab.REPORTS ||
+                                currentTab == AppNavigationTab.DOCUMENTS ||
+                                currentTab == AppNavigationTab.PAYMENTS,
+                        onClick = { navigateTo(ScreenDestination.Settings) },
+                        icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More") },
+                        label = { Text("More") },
+                        modifier = Modifier.testTag("nav_tab_more"),
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = RoyalBluePrimary,
+                            selectedTextColor = AccentOrange,
+                            indicatorColor = Color.White,
+                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
+                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
+                        )
                     )
-                )
+                }
             }
         },
         floatingActionButton = {
@@ -341,15 +354,6 @@ fun MainAppContent(
                 ) {
                     Icon(Icons.Default.PersonAdd, contentDescription = "Add Customer")
                 }
-            } else if (currentDestination is ScreenDestination.Policies) {
-                FloatingActionButton(
-                    onClick = { showAddPolicyDialog = true },
-                    containerColor = AccentOrange,
-                    contentColor = Color.White,
-                    modifier = Modifier.testTag("fab_add_policy")
-                ) {
-                    Icon(Icons.Default.NoteAdd, contentDescription = "Add Policy")
-                }
             }
         }
     ) { innerPadding ->
@@ -361,8 +365,7 @@ fun MainAppContent(
             // Secondary top tab navigation when on Settings or More options
             if (currentTab == AppNavigationTab.SETTINGS ||
                 currentTab == AppNavigationTab.REPORTS ||
-                currentTab == AppNavigationTab.DOCUMENTS ||
-                currentTab == AppNavigationTab.PAYMENTS
+                currentTab == AppNavigationTab.DOCUMENTS
             ) {
                 ScrollableTabRow(
                     selectedTabIndex = when (currentTab) {
@@ -406,6 +409,7 @@ fun MainAppContent(
                             onNavigateToCustomers = { navigateTo(ScreenDestination.Customers) },
                             onNavigateToPolicies = { navigateTo(ScreenDestination.Policies) },
                             onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
+                            onNavigateToCalendar = { navigateTo(ScreenDestination.Calendar) },
                             onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
                             onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
                             onAddCustomer = { showAddCustomerDialog = true },
@@ -425,7 +429,7 @@ fun MainAppContent(
                     is ScreenDestination.CustomerDetail -> {
                         val cust = (currentDestination as ScreenDestination.CustomerDetail).customer
                         val activeCustomer = customers.find { it.id == cust.id } ?: cust
-                        CustomerDetailScreen(
+                        CustomerProfileScreen(
                             customer = activeCustomer,
                             viewModel = licViewModel,
                             onEditCustomer = { customerToEdit = activeCustomer },
@@ -457,12 +461,14 @@ fun MainAppContent(
                     }
 
                     is ScreenDestination.Reminders -> {
-                        ReminderListScreen(
-                            viewModel = licViewModel,
-                            onCollectPremium = { policyForPaymentCollection = it },
-                            onViewCustomerProfile = { cust -> navigateTo(ScreenDestination.CustomerDetail(cust)) },
-                            onViewPolicyDetail = { pol -> navigateTo(ScreenDestination.PolicyDetail(pol)) },
+                        ReminderCenterScreen(
                             onBack = { handleBackPress() }
+                        )
+                    }
+
+                    is ScreenDestination.Calendar -> {
+                        CalendarScreen(
+                            onBackClick = { handleBackPress() }
                         )
                     }
 
@@ -471,7 +477,22 @@ fun MainAppContent(
                     }
 
                     is ScreenDestination.Reports -> {
-                        ReportScreen(viewModel = licViewModel)
+                        ReportScreen(
+                            viewModel = licViewModel,
+                            onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
+                            onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
+                            onNavigateToDocuments = { navigateTo(ScreenDestination.Documents) },
+                            onNavigateToSettings = { navigateTo(ScreenDestination.Settings) },
+                            onNavigateToHome = { navigateTo(ScreenDestination.Dashboard) },
+                            onNavigateToCustomers = { navigateTo(ScreenDestination.Customers) },
+                            onNavigateToPolicies = { navigateTo(ScreenDestination.Policies) },
+                            onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
+                            onNavigateToCustomerDetail = { custId ->
+                                val cust = customers.find { it.id == custId.toLong() }
+                                    ?: com.example.data.local.CustomerEntity(id = custId.toLong(), name = "Client #$custId", mobile = "", email = "")
+                                navigateTo(ScreenDestination.CustomerDetail(cust))
+                            }
+                        )
                     }
 
                     is ScreenDestination.Documents -> {
@@ -482,6 +503,21 @@ fun MainAppContent(
                         SettingsScreen(
                             viewModel = licViewModel,
                             onLogout = { authViewModel.logout() }
+                        )
+                    }
+
+                    is ScreenDestination.AddPolicy -> {
+                        DashboardScreen(
+                            viewModel = licViewModel,
+                            onNavigateToCustomers = { navigateTo(ScreenDestination.Customers) },
+                            onNavigateToPolicies = { navigateTo(ScreenDestination.Policies) },
+                            onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
+                            onNavigateToCalendar = { navigateTo(ScreenDestination.Calendar) },
+                            onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
+                            onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
+                            onAddCustomer = { showAddCustomerDialog = true },
+                            onAddPolicy = { showAddPolicyDialog = true },
+                            onCollectPremium = { policyForPaymentCollection = it }
                         )
                     }
                 }

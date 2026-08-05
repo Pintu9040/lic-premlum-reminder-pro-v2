@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
         AgentProfileEntity::class,
         FollowUpEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -73,7 +73,8 @@ abstract class AppDatabase : RoomDatabase() {
                     id = 1,
                     agentName = "Pintu Ojha",
                     agencyCode = "LIC-AGENT-89421",
-                    branchName = "Branch 883 (City Center)",
+                    branchCode = "08B",
+                    branchName = "Bhubaneswar Branch",
                     email = "pintu.lic.agent@gmail.com",
                     mobile = "+91 98765 43210",
                     isDarkMode = false

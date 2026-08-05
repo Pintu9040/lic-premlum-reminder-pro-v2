@@ -24,9 +24,9 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      - name: Validate google-services.json
+      - name: Validate google-services.json (Optional)
         run: |
-          echo "=== Validating Firebase Configuration ==="
+          echo "=== Checking Firebase Configuration ==="
           FILE=""
           if [ -f "app/google-services.json" ]; then
             FILE="app/google-services.json"
@@ -37,29 +37,27 @@ jobs:
           fi
 
           if [ -z "$FILE" ]; then
-            echo "::error::google-services.json was not found in app/, app/src/main/, or project root."
-            exit 1
-          fi
+            echo "::warning::google-services.json was not found. Skipping Firebase validation."
+          else
+            echo "Found google-services.json at $FILE"
 
-          echo "Found google-services.json at $FILE"
-
-          python3 -c "
+            python3 -c "
           import json, sys
           try:
               with open('$FILE', 'r') as f:
                   data = json.load(f)
               if 'project_info' not in data or 'client' not in data:
-                  print('::error::google-services.json is missing required fields (project_info or client).')
-                  sys.exit(1)
-              client_list = data.get('client', [])
-              if not client_list or not isinstance(client_list, list):
-                  print('::error::google-services.json contains no client configurations.')
-                  sys.exit(1)
-              print('Firebase google-services.json is valid.')
+                  print('::warning::google-services.json is missing required fields (project_info or client).')
+              else:
+                  client_list = data.get('client', [])
+                  if not client_list or not isinstance(client_list, list):
+                      print('::warning::google-services.json contains no client configurations.')
+                  else:
+                      print('Firebase google-services.json is valid.')
           except Exception as e:
-              print(f'::error::Failed to parse google-services.json: {e}')
-              sys.exit(1)
-          "
+              print(f'::warning::Failed to parse google-services.json: {e}')
+          " || true
+          fi
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace

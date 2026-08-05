@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "LIC Premium Reminder Pro"
+rootProject.name = "LIC Agent Daily Work CRM"
 
 include(":app")
