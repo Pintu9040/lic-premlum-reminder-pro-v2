@@ -1,12 +1,23 @@
 package com.example.ui.dashboard
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.compose.ui.graphics.asImageBitmap
+import com.example.data.local.AppSettingsManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -21,6 +32,8 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,6 +42,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -70,7 +84,8 @@ fun DashboardScreen(
     onNavigateToSettings: () -> Unit = {},
     onAddCustomer: () -> Unit,
     onAddPolicy: () -> Unit,
-    onCollectPremium: (PolicyEntity) -> Unit
+    onCollectPremium: (PolicyEntity) -> Unit,
+    onNavigateToCustomerPaymentHistory: ((CustomerEntity) -> Unit)? = null
 ) {
     val stats by viewModel.dashboardStats.collectAsState()
     val policies by viewModel.policies.collectAsState()
@@ -152,20 +167,40 @@ fun DashboardScreen(
         searchFilteredPolicies.filter { it.status == "Active" }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+    ) { innerPadding ->
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                viewModel.refreshData { success, msg ->
+                    scope.launch {
+                        snackbarHostState.showSnackbar(msg)
+                    }
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .verticalScroll(rememberScrollState())
+                .padding(innerPadding)
         ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                        .verticalScroll(rememberScrollState())
+                ) {
             // -------------------------------------------------------------
             // 1. HEADER SECTION (PREMIUM DARK BLUE THEME)
             // -------------------------------------------------------------
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
+                    .clip(RoundedCornerShape(bottomStart = 22.dp, bottomEnd = 22.dp))
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
@@ -174,7 +209,7 @@ fun DashboardScreen(
                             )
                         )
                     )
-                    .padding(horizontal = 18.dp, vertical = 18.dp)
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
             ) {
                 Column {
                     // Profile + Greeting + Date + Bell Row
@@ -188,10 +223,10 @@ fun DashboardScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.weight(1f)
                         ) {
-                            // Clickable Profile Photo / Avatar (56dp) - Tapping opens Agent Profile in Settings
+                            // Clickable Profile Photo / Avatar (48dp)
                             Box(
                                 modifier = Modifier
-                                    .size(56.dp)
+                                    .size(48.dp)
                                     .clickable { onNavigateToSettings() }
                                     .testTag("dashboard_profile_photo")
                             ) {
@@ -217,7 +252,7 @@ fun DashboardScreen(
                                             .fillMaxSize()
                                             .clip(CircleShape)
                                             .background(RoyalBluePrimary)
-                                            .border(2.5.dp, AccentOrange, CircleShape),
+                                            .border(2.dp, AccentOrange, CircleShape),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         if (uri.isNotBlank()) {
@@ -246,7 +281,7 @@ fun DashboardScreen(
                                                     style = MaterialTheme.typography.titleMedium.copy(
                                                         fontWeight = FontWeight.Bold,
                                                         color = Color.White,
-                                                        fontSize = 18.sp
+                                                        fontSize = 16.sp
                                                     )
                                                 )
                                             }
@@ -255,7 +290,7 @@ fun DashboardScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.width(12.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
 
                             Column {
                                 Text(
@@ -263,7 +298,7 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.labelMedium.copy(
                                         color = AccentOrangeLight,
                                         fontWeight = FontWeight.SemiBold,
-                                        fontSize = 12.sp
+                                        fontSize = 11.5.sp
                                     )
                                 )
                                 Text(
@@ -271,7 +306,7 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.titleLarge.copy(
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
-                                        fontSize = 19.sp
+                                        fontSize = 18.sp
                                     ),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -280,7 +315,7 @@ fun DashboardScreen(
                                     text = formattedTodayDate,
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 11.5.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium
                                     )
                                 )
@@ -294,7 +329,7 @@ fun DashboardScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // Club Member Badge (Smaller & Premium)
+                            // Club Member Badge
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(50.dp))
@@ -328,11 +363,11 @@ fun DashboardScreen(
                                 }
                             }
 
-                            // Notification Bell with Unread Badge
+                            // Notification Bell
                             IconButton(
                                 onClick = onNavigateToReminders,
                                 modifier = Modifier
-                                    .size(40.dp)
+                                    .size(38.dp)
                                     .clip(CircleShape)
                                     .background(Color.White.copy(alpha = 0.15f))
                                     .testTag("dashboard_notification_bell")
@@ -357,14 +392,14 @@ fun DashboardScreen(
                                         imageVector = Icons.Default.Notifications,
                                         contentDescription = "Reminders & Notifications",
                                         tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
                             }
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
 
                     // -------------------------------------------------------------
                     // 2. SEARCH BAR & FILTER OPTIONS
@@ -372,7 +407,7 @@ fun DashboardScreen(
                     SearchBarComponent(
                         query = searchQuery,
                         onQueryChange = { viewModel.setSearchQuery(it) },
-                        placeholderText = "Search customer, mobile, policy #, plan...",
+                        placeholderText = "Search customer, mobile, policy...",
                         testTag = "dashboard_search_input",
                         selectedFilters = selectedSearchFilters,
                         onFilterClick = { showFilterBottomSheet = true },
@@ -380,10 +415,10 @@ fun DashboardScreen(
                         onResetFilters = { viewModel.resetSearchFilters() }
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     // -------------------------------------------------------------
-                    // 2B. HORIZONTALLY SCROLLABLE FILTER OPTIONS (M3 FILTER CHIPS)
+                    // 2B. HORIZONTALLY SCROLLABLE FILTER CHIPS
                     // -------------------------------------------------------------
                     DashboardFilterChipsRow(
                         selectedFilters = selectedSearchFilters,
@@ -406,7 +441,7 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // -------------------------------------------------------------
-            // 3. QUICK ACTIONS (8 EQUAL ROUNDED CARDS IN 2 ROWS)
+            // 3. QUICK ACTIONS (3x3 GRID, EQUAL SPACING, 28DP FILLED ICONS)
             // -------------------------------------------------------------
             SectionHeader(
                 title = "Quick Actions",
@@ -419,18 +454,17 @@ fun DashboardScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Row 1: Add Client, Add Policy, Payment, Reminder
+                // Row 1: Add Client | Add Policy | Payment
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     QuickActionItemCard(
                         title = "Add Client",
                         icon = Icons.Default.PersonAdd,
-                        iconBgColor = RoyalBlueContainer,
-                        iconTintColor = RoyalBluePrimary,
+                        iconGradient = listOf(Color(0xFF2563EB), Color(0xFF1D4ED8)),
                         onClick = onAddCustomer,
                         modifier = Modifier.weight(1f),
                         testTag = "action_add_customer"
@@ -439,8 +473,7 @@ fun DashboardScreen(
                     QuickActionItemCard(
                         title = "Add Policy",
                         icon = Icons.AutoMirrored.Filled.NoteAdd,
-                        iconBgColor = AccentOrangeContainer,
-                        iconTintColor = AccentOrange,
+                        iconGradient = listOf(Color(0xFFF97316), Color(0xFFC2410C)),
                         onClick = onAddPolicy,
                         modifier = Modifier.weight(1f),
                         testTag = "action_add_policy"
@@ -449,44 +482,55 @@ fun DashboardScreen(
                     QuickActionItemCard(
                         title = "Payment",
                         icon = Icons.Default.Payments,
-                        iconBgColor = EmeraldGreenContainer,
-                        iconTintColor = EmeraldGreenSecondary,
+                        iconGradient = listOf(Color(0xFF10B981), Color(0xFF047857)),
                         onClick = onNavigateToPayments,
                         modifier = Modifier.weight(1f),
                         testTag = "action_record_payment"
                     )
+                }
 
+                // Row 2: Reminder | Payment History | Reports
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     QuickActionItemCard(
                         title = "Reminder",
                         icon = Icons.Default.NotificationsActive,
-                        iconBgColor = ErrorRedContainer,
-                        iconTintColor = ErrorRed,
+                        iconGradient = listOf(Color(0xFFEF4444), Color(0xFFB91C1C)),
                         onClick = onNavigateToReminders,
                         modifier = Modifier.weight(1f),
                         testTag = "action_send_reminder"
                     )
-                }
 
-                // Row 2: Reports, Calendar, Documents, Scan QR
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                    QuickActionItemCard(
+                        title = "Payment History",
+                        icon = Icons.Default.History,
+                        iconGradient = listOf(Color(0xFFA855F7), Color(0xFF7E22CE)),
+                        onClick = onNavigateToPayments,
+                        modifier = Modifier.weight(1f),
+                        testTag = "action_customer_payment_history"
+                    )
+
                     QuickActionItemCard(
                         title = "Reports",
                         icon = Icons.Default.PieChart,
-                        iconBgColor = RoyalBlueContainer,
-                        iconTintColor = RoyalBluePrimary,
+                        iconGradient = listOf(Color(0xFF6366F1), Color(0xFF4338CA)),
                         onClick = onNavigateToReports,
                         modifier = Modifier.weight(1f),
                         testTag = "action_reports"
                     )
+                }
 
+                // Row 3: Calendar | Documents | Scan QR
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     QuickActionItemCard(
                         title = "Calendar",
                         icon = Icons.Default.CalendarMonth,
-                        iconBgColor = AccentOrangeContainer,
-                        iconTintColor = AccentOrange,
+                        iconGradient = listOf(Color(0xFFF59E0B), Color(0xFFB45309)),
                         onClick = onNavigateToCalendar,
                         modifier = Modifier.weight(1f),
                         testTag = "action_calendar"
@@ -495,8 +539,7 @@ fun DashboardScreen(
                     QuickActionItemCard(
                         title = "Documents",
                         icon = Icons.Default.FolderOpen,
-                        iconBgColor = EmeraldGreenContainer,
-                        iconTintColor = EmeraldGreenSecondary,
+                        iconGradient = listOf(Color(0xFF14B8A6), Color(0xFF0F766E)),
                         onClick = onNavigateToDocuments,
                         modifier = Modifier.weight(1f),
                         testTag = "action_documents"
@@ -505,14 +548,14 @@ fun DashboardScreen(
                     QuickActionItemCard(
                         title = "Scan QR",
                         icon = Icons.Default.QrCodeScanner,
-                        iconBgColor = ErrorRedContainer,
-                        iconTintColor = ErrorRed,
+                        iconGradient = listOf(Color(0xFF06B6D4), Color(0xFF0E7490)),
                         onClick = { showQrDialog = true },
                         modifier = Modifier.weight(1f),
                         testTag = "action_scan_qr"
                     )
                 }
             }
+
 
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -806,172 +849,35 @@ fun DashboardScreen(
         }
 
         // -------------------------------------------------------------
-        // 6. FLOATING ACTION BUTTON WITH EXPANDABLE SPEED DIAL OPTIONS
+        // 6. FLOATING ACTION BUTTON (FAB) - Opens Existing Add Client Screen
         // -------------------------------------------------------------
-        if (fabExpanded) {
-            // Dismiss Overlay
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.45f))
-                    .clickable { fabExpanded = false }
-            )
-        }
-
-        // FAB Speed Dial Items Column
-        Column(
+        FloatingActionButton(
+            onClick = onAddCustomer,
+            containerColor = AccentOrange,
+            contentColor = Color.White,
+            shape = CircleShape,
+            elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 8.dp, pressedElevation = 12.dp),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 20.dp, end = 20.dp),
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(bottom = 20.dp, end = 20.dp)
+                .size(60.dp)
+                .testTag("dashboard_add_client_fab")
         ) {
-            AnimatedVisibility(
-                visible = fabExpanded,
-                enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
-                exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 })
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    FabOptionRow(
-                        label = "Add Client",
-                        icon = Icons.Default.PersonAdd,
-                        containerColor = RoyalBluePrimary,
-                        onClick = {
-                            fabExpanded = false
-                            onAddCustomer()
-                        },
-                        testTag = "fab_option_add_client"
-                    )
-
-                    FabOptionRow(
-                        label = "Add Policy",
-                        icon = Icons.AutoMirrored.Filled.NoteAdd,
-                        containerColor = AccentOrange,
-                        onClick = {
-                            fabExpanded = false
-                            onAddPolicy()
-                        },
-                        testTag = "fab_option_add_policy"
-                    )
-
-                    FabOptionRow(
-                        label = "Record Payment",
-                        icon = Icons.Default.Payments,
-                        containerColor = EmeraldGreenSecondary,
-                        onClick = {
-                            fabExpanded = false
-                            onNavigateToPayments()
-                        },
-                        testTag = "fab_option_record_payment"
-                    )
-
-                    FabOptionRow(
-                        label = "Add Follow-up",
-                        icon = Icons.Default.NotificationsActive,
-                        containerColor = ErrorRed,
-                        onClick = {
-                            fabExpanded = false
-                            onNavigateToReminders()
-                        },
-                        testTag = "fab_option_add_followup"
-                    )
-                }
-            }
-
-            // Main Rotating "+" FAB
-            val rotation by animateFloatAsState(
-                targetValue = if (fabExpanded) 45f else 0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy),
-                label = "fab_rotate"
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add Client",
+                modifier = Modifier.size(28.dp)
             )
-
-            FloatingActionButton(
-                onClick = { fabExpanded = !fabExpanded },
-                containerColor = AccentOrange,
-                contentColor = Color.White,
-                shape = CircleShape,
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                modifier = Modifier
-                    .size(58.dp)
-                    .testTag("dashboard_main_fab")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Expand Quick Actions",
-                    modifier = Modifier
-                        .size(28.dp)
-                        .rotate(rotation)
-                )
-            }
         }
     }
 
     // -------------------------------------------------------------
-    // 7. SCAN QR DIALOG
+    // 7. PAYMENT LINK & SCAN QR MODAL
     // -------------------------------------------------------------
     if (showQrDialog) {
-        AlertDialog(
-            onDismissRequest = { showQrDialog = false },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        showQrDialog = false
-                        Toast.makeText(context, "QR Scanner: Simulated Policy Scan Completed", Toast.LENGTH_SHORT).show()
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
-                ) {
-                    Text("Simulate QR Scan")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showQrDialog = false }) {
-                    Text("Close")
-                }
-            },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.QrCodeScanner,
-                        contentDescription = null,
-                        tint = RoyalBluePrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("LIC Policy QR Scanner", fontWeight = FontWeight.Bold)
-                }
-            },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "Point camera at an LIC Policy Bond or Payment Receipt QR Code to instant-load details.",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Box(
-                        modifier = Modifier
-                            .size(160.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(RoyalBlueDark)
-                            .border(2.dp, AccentOrange, RoundedCornerShape(16.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.8f),
-                            modifier = Modifier.size(72.dp)
-                        )
-                    }
-                }
-            }
+        PaymentLinkModal(
+            onDismiss = { showQrDialog = false },
+            duePolicies = dueTodayPolicies
         )
     }
 
@@ -982,6 +888,8 @@ fun DashboardScreen(
             onReset = { viewModel.resetSearchFilters() },
             onDismiss = { showFilterBottomSheet = false }
         )
+    }
+        }
     }
 }
 
@@ -1036,57 +944,143 @@ fun FabOptionRow(
 fun QuickActionItemCard(
     title: String,
     icon: ImageVector,
-    iconBgColor: Color,
-    iconTintColor: Color,
+    iconGradient: List<Color>,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     testTag: String = ""
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+
+    // Card press scale animation (100% -> 95% -> 100%)
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1.0f,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_scale"
+    )
+
+    // Icon bounce scale animation (1.0 -> 1.15 -> 1.0)
+    val iconScale by animateFloatAsState(
+        targetValue = if (isPressed) 1.15f else 1.0f,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_icon_scale"
+    )
+
+    // Elevation (14dp default -> 18dp on press)
+    val elevationState by animateDpAsState(
+        targetValue = if (isPressed) 18.dp else 14.dp,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_elevation"
+    )
+
+    // Border: 1dp #3A4E6B 30% opacity when idle -> 2dp #38BDF8 glowing on press
+    val borderColor by animateColorAsState(
+        targetValue = if (isPressed) Color(0xFF38BDF8) else Color(0xFF3A4E6B).copy(alpha = 0.30f),
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_border_color"
+    )
+
+    val borderWidth by animateDpAsState(
+        targetValue = if (isPressed) 2.dp else 1.dp,
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_border_width"
+    )
+
+    // Soft blue glowing shadow
+    val shadowColor by animateColorAsState(
+        targetValue = if (isPressed) Color(0xFF38BDF8).copy(alpha = 0.60f) else Color(0xFF2563EB).copy(alpha = 0.25f),
+        animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+        label = "quick_action_shadow_color"
+    )
+
     Card(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = modifier
-            .height(82.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .height(130.dp)
             .testTag(testTag)
-            .shadow(1.dp, RoundedCornerShape(14.dp)),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+            .shadow(
+                elevation = elevationState,
+                shape = RoundedCornerShape(22.dp),
+                spotColor = shadowColor,
+                ambientColor = shadowColor.copy(alpha = 0.15f)
+            ),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color.Transparent
+        ),
+        border = BorderStroke(
+            width = borderWidth,
+            color = borderColor
+        )
     ) {
-        Column(
+        Box(
             modifier = Modifier
-                .padding(vertical = 8.dp, horizontal = 2.dp)
-                .fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(
+                            Color(0xFF263B55),
+                            Color(0xFF162131)
+                        )
+                    ),
+                    shape = RoundedCornerShape(22.dp)
+                )
+                .padding(horizontal = 6.dp, vertical = 10.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(iconBgColor),
-                contentAlignment = Alignment.Center
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
             ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = title,
-                    tint = iconTintColor,
-                    modifier = Modifier.size(18.dp)
+                // 56dp Circular Background with Icon
+                Box(
+                    modifier = Modifier
+                        .size(56.dp)
+                        .shadow(
+                            elevation = 6.dp,
+                            shape = CircleShape,
+                            spotColor = iconGradient.first().copy(alpha = 0.4f),
+                            ambientColor = iconGradient.first().copy(alpha = 0.2f)
+                        )
+                        .background(
+                            brush = Brush.verticalGradient(iconGradient),
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = title,
+                        tint = Color.White,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .graphicsLayer {
+                                scaleX = iconScale
+                                scaleY = iconScale
+                            }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = title,
+                    style = TextStyle(
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.5.sp,
+                        color = Color.White
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
                 )
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center
-            )
         }
     }
 }
@@ -1248,58 +1242,60 @@ fun WorkPolicyItemCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Call & WhatsApp with 16dp spacing
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Call Button
+                    // Call Button (Material3 Filled Icon Button, Blue background)
                     IconButton(
                         onClick = onCall,
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
-                            .background(RoyalBlueContainer)
+                            .background(RoyalBluePrimary)
                             .testTag("action_call")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Phone,
                             contentDescription = "Call Customer",
-                            tint = RoyalBluePrimary,
-                            modifier = Modifier.size(17.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
-                    // WhatsApp Button
+                    // WhatsApp Button (Material3 Filled Icon Button, Green background)
                     IconButton(
                         onClick = onRemind,
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(38.dp)
                             .clip(CircleShape)
-                            .background(EmeraldGreenContainer)
+                            .background(EmeraldGreenSecondary)
                             .testTag("action_whatsapp")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Chat,
                             contentDescription = "WhatsApp Reminder",
-                            tint = EmeraldGreenSecondary,
-                            modifier = Modifier.size(17.dp)
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
 
-                // Green Collect Button
+                // Green Collect Button (Material3 Filled Button, Rounded 16dp)
                 Button(
                     onClick = onCollect,
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary)
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 7.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
+                    modifier = Modifier.testTag("action_collect")
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Payments,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(15.dp)
+                            modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
@@ -1307,7 +1303,7 @@ fun WorkPolicyItemCard(
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
-                                fontSize = 12.sp
+                                fontSize = 12.5.sp
                             )
                         )
                     }
@@ -1315,6 +1311,365 @@ fun WorkPolicyItemCard(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PaymentLinkModal(
+    onDismiss: () -> Unit,
+    duePolicies: List<PolicyEntity> = emptyList()
+) {
+    val context = LocalContext.current
+    val appSettings = remember { AppSettingsManager.getSettings(context) }
+
+    var accountHolderName by remember { mutableStateOf(appSettings.accountHolderName) }
+    var upiVpaText by remember { mutableStateOf(appSettings.upiVpaId) }
+
+    var selectedPolicy by remember { mutableStateOf(duePolicies.firstOrNull()) }
+    var customerNameText by remember(selectedPolicy) {
+        mutableStateOf(selectedPolicy?.customerName ?: "Valued Customer")
+    }
+    var policyNumberText by remember(selectedPolicy) {
+        mutableStateOf(selectedPolicy?.policyNumber ?: "LIC-POL-1001")
+    }
+    var amountText by remember(selectedPolicy) {
+        mutableStateOf(selectedPolicy?.premiumAmount?.toInt()?.toString() ?: "5000")
+    }
+
+    val formattedAmount = amountText.ifEmpty { "0" }
+    val pNo = policyNumberText.ifEmpty { "LIC-POL" }
+    val encodedName = Uri.encode(accountHolderName)
+    val upiPayLink = remember(upiVpaText, accountHolderName, formattedAmount, pNo) {
+        "upi://pay?pa=$upiVpaText&pn=$encodedName&am=$formattedAmount&tn=${Uri.encode("LIC Policy $pNo")}&cu=INR"
+    }
+
+    val qrBitmap = remember(upiPayLink) {
+        com.example.util.QrCodeGenerator.generateQrBitmap(upiPayLink, size = 500)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {},
+        shape = RoundedCornerShape(24.dp),
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(RoyalBlueContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCode,
+                            contentDescription = null,
+                            tint = RoyalBluePrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Payment Link & Auto QR",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        Text(
+                            text = "Auto Generated UPI Payment QR Code",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // Customer & Policy Info
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = customerNameText,
+                        onValueChange = { customerNameText = it },
+                        label = { Text("Customer Name") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = policyNumberText,
+                        onValueChange = { policyNumberText = it },
+                        label = { Text("Policy No.") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+
+                // Account & Amount Input Fields
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it },
+                        label = { Text("Amount (₹)") },
+                        leadingIcon = { Icon(Icons.Default.CurrencyRupee, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    OutlinedTextField(
+                        value = upiVpaText,
+                        onValueChange = { upiVpaText = it },
+                        label = { Text("UPI ID") },
+                        leadingIcon = { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.3f),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                }
+
+                // Account Holder Name Field
+                OutlinedTextField(
+                    value = accountHolderName,
+                    onValueChange = { accountHolderName = it },
+                    label = { Text("Account Holder Name") },
+                    leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                // Rendered Auto-Generated UPI QR Code Box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF0F172A))
+                        .padding(14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier
+                                .size(160.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color.White)
+                                .padding(10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (qrBitmap != null) {
+                                androidx.compose.foundation.Image(
+                                    bitmap = qrBitmap.asImageBitmap(),
+                                    contentDescription = "Auto Generated Payment QR",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                CircularProgressIndicator(color = RoyalBluePrimary)
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Scan with Google Pay / PhonePe / Paytm / BHIM",
+                            style = TextStyle(
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        )
+                        Text(
+                            text = "₹$formattedAmount • VPA: $upiVpaText",
+                            style = TextStyle(
+                                color = AccentOrangeLight,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
+                    }
+                }
+
+                Text(
+                    text = "Quick Actions:",
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                )
+
+                // Row 1: Copy UPI ID, Copy Link, Download QR
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Copy UPI ID
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("UPI ID", upiVpaText))
+                            Toast.makeText(context, "UPI ID copied: $upiVpaText", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy VPA", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Copy Link
+                    OutlinedButton(
+                        onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText("UPI Payment Link", upiPayLink))
+                            Toast.makeText(context, "Payment Link copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Copy Link", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Download QR
+                    OutlinedButton(
+                        onClick = {
+                            val cardBitmap = com.example.util.QrCodeGenerator.createBrandedQrCardBitmap(
+                                accountHolderName = accountHolderName,
+                                upiId = upiVpaText,
+                                amount = formattedAmount,
+                                policyNumber = pNo,
+                                customerName = customerNameText
+                            )
+                            val uri = com.example.util.QrCodeGenerator.saveQrBitmapToGallery(context, cardBitmap, "LIC_Payment_QR_$pNo")
+                            if (uri != null) {
+                                Toast.makeText(context, "QR saved to Gallery/Pictures/LIC_QR", Toast.LENGTH_LONG).show()
+                            } else {
+                                Toast.makeText(context, "Could not save QR code image", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Save QR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Row 2: Share QR, WhatsApp, Open UPI App
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Share QR Image
+                    Button(
+                        onClick = {
+                            val cardBitmap = com.example.util.QrCodeGenerator.createBrandedQrCardBitmap(
+                                accountHolderName = accountHolderName,
+                                upiId = upiVpaText,
+                                amount = formattedAmount,
+                                policyNumber = pNo,
+                                customerName = customerNameText
+                            )
+                            val cacheUri = com.example.util.QrCodeGenerator.saveQrBitmapToCache(context, cardBitmap)
+                            if (cacheUri != null) {
+                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "image/png"
+                                    putExtra(Intent.EXTRA_STREAM, cacheUri)
+                                    putExtra(Intent.EXTRA_TEXT, "LIC Premium Payment QR for ₹$formattedAmount\nPolicy No: $pNo\nUPI ID: $upiVpaText\n$upiPayLink")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(shareIntent, "Share Payment QR"))
+                            } else {
+                                Toast.makeText(context, "Could not prepare QR image for sharing", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Share QR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // WhatsApp Message
+                    Button(
+                        onClick = {
+                            val custName = customerNameText.ifEmpty { "Valued Customer" }
+                            val whatsAppMsg = """
+Dear $custName,
+
+Your LIC premium of ₹$formattedAmount for Policy No. $pNo is due.
+
+Please pay using the secure UPI link below:
+$upiPayLink
+
+UPI ID: $upiVpaText ($accountHolderName)
+
+Thank you.
+""".trimIndent()
+                            launchWhatsAppMessage(context, "", whatsAppMsg)
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("WhatsApp", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    // Open UPI App
+                    Button(
+                        onClick = {
+                            val upiIntent = Intent(Intent.ACTION_VIEW, Uri.parse(upiPayLink))
+                            try {
+                                context.startActivity(Intent.createChooser(upiIntent, "Pay via UPI App"))
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "No UPI app available on this device", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                        contentPadding = PaddingValues(vertical = 8.dp, horizontal = 4.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Pay UPI", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    )
 }
 
 @Composable

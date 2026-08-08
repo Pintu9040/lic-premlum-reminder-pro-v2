@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.example.util.SearchFilterEngine
 
 // Royal Blue & Dark Theme Palette
 private val DarkBg = Color(0xFF0F172A)
@@ -256,10 +257,10 @@ fun ReminderCenterScreen(
                 ReminderCategory.COMPLETED -> item.isCompleted
                 else -> !item.isCompleted && item.dueCategory == selectedCategory
             }
-            val matchesSearch = searchQuery.isBlank() ||
-                    item.customerName.contains(searchQuery, ignoreCase = true) ||
-                    item.policyNumber.contains(searchQuery, ignoreCase = true) ||
-                    item.customerMobile.contains(searchQuery, ignoreCase = true)
+            val matchesSearch = SearchFilterEngine.matchesQuery(
+                query = searchQuery,
+                fields = listOf(item.customerName, item.policyNumber, item.customerMobile, item.planName, item.daysStatus)
+            )
 
             matchesCategory && matchesSearch
         }

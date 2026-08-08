@@ -26,6 +26,8 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +59,8 @@ import com.example.ui.payment.*
 import com.example.ui.policy.getPolicyOutstandingBalance
 import com.example.ui.reminders.FollowUpFormDialog
 import com.example.ui.theme.*
+import com.example.util.NoMatchingRecordsEmptyState
+import com.example.util.SearchFilterEngine
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -115,11 +119,22 @@ fun CustomerListScreen(
         val list = customers.filter { customer ->
             val custPolicies = policies.filter { it.customerId == customer.id }
 
-            // Search matching by Name, Mobile, or Policy Number
-            val matchesQuery = searchQuery.isBlank() ||
-                    customer.name.contains(searchQuery, ignoreCase = true) ||
-                    customer.mobile.contains(searchQuery) ||
-                    custPolicies.any { it.policyNumber.contains(searchQuery, ignoreCase = true) }
+            val custPayments = payments.filter { it.customerId == customer.id }
+
+            // Global Multi-Keyword Search across Customer Name, Mobile, WhatsApp, Policy #, Plan Name, Nominee, Receipt #
+            val matchesQuery = SearchFilterEngine.matchesQuery(
+                query = searchQuery,
+                fields = listOf(
+                    customer.name,
+                    customer.mobile,
+                    customer.whatsapp,
+                    customer.email,
+                    customer.aadhaar,
+                    customer.pan,
+                    customer.occupation
+                ) + custPolicies.flatMap { listOf(it.policyNumber, it.planName, it.nominee) }
+                  + custPayments.map { it.receiptNumber }
+            )
 
             // Filter logic
             val isOverdue = custPolicies.any { policy ->
@@ -168,11 +183,31 @@ fun CustomerListScreen(
         }
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+    ) { innerPadding ->
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                viewModel.refreshData { success, msg ->
+                    scope.launch {
+                        snackbarHostState.showSnackbar(msg)
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // TOP APP BAR / HEADER SECTION (Royal Blue Header with 20dp section spacing & padding)
             Surface(
@@ -486,8 +521,18 @@ fun CustomerListScreen(
                     })
                 }
 
-                filteredCustomers.isEmpty() -> {
+                customers.isEmpty() -> {
                     CustomerEmptyState(onAddFirstCustomer = onAddCustomer)
+                }
+
+                filteredCustomers.isEmpty() -> {
+                    NoMatchingRecordsEmptyState(
+                        query = searchQuery,
+                        onResetFilters = {
+                            viewModel.clearAllFilters()
+                            selectedFilterTab = CustomerFilterTab.ALL
+                        }
+                    )
                 }
 
                 else -> {
@@ -638,6 +683,8 @@ fun CustomerListScreen(
             onReset = { viewModel.resetSearchFilters() },
             onDismiss = { showFilterBottomSheet = false }
         )
+    }
+        }
     }
 }
 
@@ -2008,35 +2055,14 @@ fun CustomerDetailScreen(
                             if (customerPayments.isEmpty()) {
                                 Text("No payment transactions recorded yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    customerPayments.forEach { payment ->
-                                        Surface(
-                                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(12.dp),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text("₹${"%.0f".format(payment.paidAmount)}", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = EmeraldGreenSecondary)
-                                                    Text("Date: ${payment.paymentDate} • ${payment.paymentMode}", style = MaterialTheme.typography.bodySmall)
-                                                    Text("Receipt #: ${payment.receiptNumber}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                }
-                                                Row {
-                                                    IconButton(onClick = { viewingReceiptPayment = payment }) {
-                                                        Icon(Icons.Default.Receipt, contentDescription = "Receipt", tint = RoyalBluePrimary)
-                                                    }
-                                                    IconButton(onClick = { editingPayment = payment }) {
-                                                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                com.example.ui.payment.CustomerPaymentHistoryDataTable(
+                                    payments = customerPayments,
+                                    policies = customerPolicies,
+                                    customerName = customer.name,
+                                    onEdit = { editingPayment = it },
+                                    onDelete = { deletingPayment = it },
+                                    onReceipt = { viewingReceiptPayment = it }
+                                )
                             }
                         }
                     }

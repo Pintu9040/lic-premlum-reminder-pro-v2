@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.LicViewModel
+import com.example.util.SearchFilterEngine
 import kotlinx.coroutines.launch
 
 // Royal Blue Dark Theme Palette
@@ -97,6 +98,18 @@ fun ReportScreen(
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    val agentProfileState = viewModel?.agentProfile?.collectAsState()
+    val agentProfile = agentProfileState?.value
+
+    val livePoliciesState = viewModel?.policies?.collectAsState()
+    val livePolicies = livePoliciesState?.value ?: emptyList()
+
+    val liveCustomersState = viewModel?.customers?.collectAsState()
+    val liveCustomers = liveCustomersState?.value ?: emptyList()
+
+    val livePaymentsState = viewModel?.payments?.collectAsState()
+    val livePayments = livePaymentsState?.value ?: emptyList()
+
     // State Variables
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -156,16 +169,16 @@ fun ReportScreen(
     val filteredTopCustomers = remember(searchQuery, forceEmptyState) {
         if (forceEmptyState) emptyList()
         else if (searchQuery.isBlank()) allTopCustomers
-        else allTopCustomers.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        else allTopCustomers.filter {
+            SearchFilterEngine.matchesQuery(searchQuery, listOf(it.name, it.statusBadge, it.collectedAmount, it.outstandingAmount))
+        }
     }
 
     val filteredRecentCollections = remember(searchQuery, forceEmptyState) {
         if (forceEmptyState) emptyList()
         else if (searchQuery.isBlank()) allRecentCollections
         else allRecentCollections.filter {
-            it.customerName.contains(searchQuery, ignoreCase = true) ||
-                    it.policyNumber.contains(searchQuery, ignoreCase = true) ||
-                    it.receiptNumber.contains(searchQuery, ignoreCase = true)
+            SearchFilterEngine.matchesQuery(searchQuery, listOf(it.customerName, it.policyNumber, it.receiptNumber, it.paymentMode, it.premiumAmount))
         }
     }
 
@@ -351,7 +364,28 @@ fun ReportScreen(
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Generating LIC Executive PDF Report...")
+                                snackbarHostState.showSnackbar("Generating LIC PDF Report...")
+                                val reportType = when (selectedCardIndex) {
+                                    0 -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                    1 -> com.example.pdf.ReportType.OUTSTANDING_PREMIUM
+                                    2 -> com.example.pdf.ReportType.COMPLETE_PORTFOLIO
+                                    else -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                }
+                                val reportData = com.example.pdf.PdfReportData(
+                                    reportType = reportType,
+                                    agentProfile = agentProfile,
+                                    customerList = liveCustomers,
+                                    policyList = livePolicies,
+                                    paymentList = livePayments,
+                                    filterPeriod = selectedFilter.label
+                                )
+                                val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                res.onSuccess { file ->
+                                    snackbarHostState.showSnackbar("PDF Report Saved: ${file.name}")
+                                    com.example.pdf.PdfReportGenerator.openPdf(context, file)
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar("Report Generation Failed: ${err.message}")
+                                }
                             }
                         },
                         modifier = Modifier
@@ -387,7 +421,27 @@ fun ReportScreen(
                     OutlinedButton(
                         onClick = {
                             coroutineScope.launch {
-                                snackbarHostState.showSnackbar("Preparing summary report for WhatsApp sharing...")
+                                snackbarHostState.showSnackbar("Preparing PDF report for sharing...")
+                                val reportType = when (selectedCardIndex) {
+                                    0 -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                    1 -> com.example.pdf.ReportType.OUTSTANDING_PREMIUM
+                                    2 -> com.example.pdf.ReportType.COMPLETE_PORTFOLIO
+                                    else -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                }
+                                val reportData = com.example.pdf.PdfReportData(
+                                    reportType = reportType,
+                                    agentProfile = agentProfile,
+                                    customerList = liveCustomers,
+                                    policyList = livePolicies,
+                                    paymentList = livePayments,
+                                    filterPeriod = selectedFilter.label
+                                )
+                                val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                res.onSuccess { file ->
+                                    com.example.pdf.PdfReportGenerator.sharePdf(context, file)
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar("Failed to share PDF: ${err.message}")
+                                }
                             }
                         },
                         modifier = Modifier

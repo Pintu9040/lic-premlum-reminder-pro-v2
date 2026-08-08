@@ -64,62 +64,62 @@ class LicRepository(
     }
 
     // --- Customers Firestore Flow & Operations ---
-    val allCustomers: Flow<List<CustomerEntity>> = callbackFlow {
-        val firestore = getFirestore()
-        if (firestore == null) {
-            val job = scope.launch {
-                customerDao.getAllCustomers().collect { trySend(it) }
+    val allCustomers: Flow<List<CustomerEntity>> = channelFlow {
+        val roomJob = scope.launch {
+            customerDao.getAllCustomers().collect { list ->
+                send(list)
             }
-            awaitClose { job.cancel() }
-            return@callbackFlow
         }
 
+        val firestore = getFirestore()
         var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
-        val job = scope.launch {
-            val uid = syncManager.getOrEnsureUid()
-            Log.d("FirestoreSync", "Listening for Customers in Firestore at path: agents/$uid/customers")
-            listenerRegistration = firestore.collection("agents").document(uid)
-                .collection("customers")
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.e("FirestoreSync", "Firestore customer listener failed for UID: $uid. Error: ${error.localizedMessage}", error)
-                        scope.launch {
-                            val local = customerDao.getAllCustomersSync()
-                            trySend(local)
+        if (firestore != null) {
+            scope.launch {
+                try {
+                    val uid = syncManager.getOrEnsureUid()
+                    Log.d("FirestoreSync", "Listening for Customers in Firestore at path: agents/$uid/customers")
+                    listenerRegistration = firestore.collection("agents").document(uid)
+                        .collection("customers")
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null) {
+                                Log.w("FirestoreSync", "Firestore customer listener notice for UID: $uid (${error.localizedMessage}). Local database active.")
+                                return@addSnapshotListener
+                            }
+                            if (snapshot != null) {
+                                val list = snapshot.documents.mapNotNull { doc ->
+                                    val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                                    if (id == 0L) null else CustomerEntity(
+                                        id = id,
+                                        name = doc.getString("name") ?: "",
+                                        mobile = doc.getString("mobile") ?: "",
+                                        whatsapp = doc.getString("whatsapp") ?: "",
+                                        email = doc.getString("email") ?: "",
+                                        address = doc.getString("address") ?: "",
+                                        dob = doc.getString("dob") ?: "",
+                                        anniversary = doc.getString("anniversary") ?: "",
+                                        aadhaar = doc.getString("aadhaar") ?: "",
+                                        pan = doc.getString("pan") ?: "",
+                                        occupation = doc.getString("occupation") ?: "",
+                                        notes = doc.getString("notes") ?: "",
+                                        photoUri = doc.getString("photoUri")?.ifBlank { null },
+                                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                                    )
+                                }
+                                if (list.isNotEmpty()) {
+                                    scope.launch {
+                                        list.forEach { customerDao.insertCustomer(it) }
+                                    }
+                                }
+                            }
                         }
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        Log.d("FirestoreSync", "Received Customer snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
-                            CustomerEntity(
-                                id = id,
-                                name = doc.getString("name") ?: "",
-                                mobile = doc.getString("mobile") ?: "",
-                                whatsapp = doc.getString("whatsapp") ?: "",
-                                email = doc.getString("email") ?: "",
-                                address = doc.getString("address") ?: "",
-                                dob = doc.getString("dob") ?: "",
-                                anniversary = doc.getString("anniversary") ?: "",
-                                aadhaar = doc.getString("aadhaar") ?: "",
-                                pan = doc.getString("pan") ?: "",
-                                occupation = doc.getString("occupation") ?: "",
-                                notes = doc.getString("notes") ?: "",
-                                photoUri = doc.getString("photoUri")?.ifBlank { null },
-                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-                            )
-                        }
-                        scope.launch {
-                            list.forEach { customerDao.insertCustomer(it) }
-                            val fullLocalList = customerDao.getAllCustomersSync()
-                            trySend(fullLocalList)
-                        }
-                    }
+                } catch (e: Exception) {
+                    Log.w("FirestoreSync", "Error attaching customer listener: ${e.localizedMessage}")
                 }
+            }
         }
+
         awaitClose {
-            job.cancel()
+            roomJob.cancel()
             listenerRegistration?.remove()
         }
     }
@@ -187,65 +187,65 @@ class LicRepository(
     }
 
     // --- Policies Firestore Flow & Operations ---
-    val allPolicies: Flow<List<PolicyEntity>> = callbackFlow {
-        val firestore = getFirestore()
-        if (firestore == null) {
-            val job = scope.launch {
-                policyDao.getAllPolicies().collect { trySend(it) }
+    val allPolicies: Flow<List<PolicyEntity>> = channelFlow {
+        val roomJob = scope.launch {
+            policyDao.getAllPolicies().collect { list ->
+                send(list)
             }
-            awaitClose { job.cancel() }
-            return@callbackFlow
         }
 
+        val firestore = getFirestore()
         var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
-        val job = scope.launch {
-            val uid = syncManager.getOrEnsureUid()
-            Log.d("FirestoreSync", "Listening for Policies in Firestore at path: agents/$uid/policies")
-            listenerRegistration = firestore.collection("agents").document(uid)
-                .collection("policies")
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.e("FirestoreSync", "Firestore policy listener error for UID: $uid: ${error.localizedMessage}", error)
-                        scope.launch {
-                            val local = policyDao.getAllPoliciesSync()
-                            trySend(local)
+        if (firestore != null) {
+            scope.launch {
+                try {
+                    val uid = syncManager.getOrEnsureUid()
+                    Log.d("FirestoreSync", "Listening for Policies in Firestore at path: agents/$uid/policies")
+                    listenerRegistration = firestore.collection("agents").document(uid)
+                        .collection("policies")
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null) {
+                                Log.w("FirestoreSync", "Firestore policy listener notice for UID: $uid (${error.localizedMessage}). Local database active.")
+                                return@addSnapshotListener
+                            }
+                            if (snapshot != null) {
+                                val list = snapshot.documents.mapNotNull { doc ->
+                                    val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                                    if (id == 0L) null else PolicyEntity(
+                                        id = id,
+                                        policyNumber = doc.getString("policyNumber") ?: "",
+                                        customerId = doc.getLong("customerId") ?: 0L,
+                                        customerName = doc.getString("customerName") ?: "",
+                                        planName = doc.getString("planName") ?: "",
+                                        premiumAmount = doc.getDouble("premiumAmount") ?: 0.0,
+                                        sumAssured = doc.getDouble("sumAssured") ?: 0.0,
+                                        premiumMode = doc.getString("premiumMode") ?: "Yearly",
+                                        dueDate = doc.getString("dueDate") ?: "",
+                                        maturityDate = doc.getString("maturityDate") ?: "",
+                                        status = doc.getString("status") ?: "Active",
+                                        nominee = doc.getString("nominee") ?: "",
+                                        policyTerm = (doc.getLong("policyTerm") ?: 20L).toInt(),
+                                        premiumPayingTerm = (doc.getLong("premiumPayingTerm") ?: 16L).toInt(),
+                                        issueDate = doc.getString("issueDate") ?: "",
+                                        gracePeriodDays = (doc.getLong("gracePeriodDays") ?: 30L).toInt(),
+                                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                                    )
+                                }
+                                if (list.isNotEmpty()) {
+                                    scope.launch {
+                                        list.forEach { policyDao.insertPolicy(it) }
+                                    }
+                                }
+                            }
                         }
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        Log.d("FirestoreSync", "Received Policy snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
-                            PolicyEntity(
-                                id = id,
-                                policyNumber = doc.getString("policyNumber") ?: "",
-                                customerId = doc.getLong("customerId") ?: 0L,
-                                customerName = doc.getString("customerName") ?: "",
-                                planName = doc.getString("planName") ?: "",
-                                premiumAmount = doc.getDouble("premiumAmount") ?: 0.0,
-                                sumAssured = doc.getDouble("sumAssured") ?: 0.0,
-                                premiumMode = doc.getString("premiumMode") ?: "Yearly",
-                                dueDate = doc.getString("dueDate") ?: "",
-                                maturityDate = doc.getString("maturityDate") ?: "",
-                                status = doc.getString("status") ?: "Active",
-                                nominee = doc.getString("nominee") ?: "",
-                                policyTerm = (doc.getLong("policyTerm") ?: 20L).toInt(),
-                                premiumPayingTerm = (doc.getLong("premiumPayingTerm") ?: 16L).toInt(),
-                                issueDate = doc.getString("issueDate") ?: "",
-                                gracePeriodDays = (doc.getLong("gracePeriodDays") ?: 30L).toInt(),
-                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-                            )
-                        }
-                        scope.launch {
-                            list.forEach { policyDao.insertPolicy(it) }
-                            val fullLocalList = policyDao.getAllPoliciesSync()
-                            trySend(fullLocalList)
-                        }
-                    }
+                } catch (e: Exception) {
+                    Log.w("FirestoreSync", "Error attaching policy listener: ${e.localizedMessage}")
                 }
+            }
         }
+
         awaitClose {
-            job.cancel()
+            roomJob.cancel()
             listenerRegistration?.remove()
         }
     }
@@ -286,60 +286,60 @@ class LicRepository(
     }
 
     // --- Payments Firestore Flow & Operations ---
-    val allPayments: Flow<List<PaymentEntity>> = callbackFlow {
-        val firestore = getFirestore()
-        if (firestore == null) {
-            val job = scope.launch {
-                paymentDao.getAllPayments().collect { trySend(it) }
+    val allPayments: Flow<List<PaymentEntity>> = channelFlow {
+        val roomJob = scope.launch {
+            paymentDao.getAllPayments().collect { list ->
+                send(list)
             }
-            awaitClose { job.cancel() }
-            return@callbackFlow
         }
 
+        val firestore = getFirestore()
         var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
-        val job = scope.launch {
-            val uid = syncManager.getOrEnsureUid()
-            Log.d("FirestoreSync", "Listening for Payments in Firestore at path: agents/$uid/payments")
-            listenerRegistration = firestore.collection("agents").document(uid)
-                .collection("payments")
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.e("FirestoreSync", "Firestore payment listener error for UID: $uid: ${error.localizedMessage}", error)
-                        scope.launch {
-                            val local = paymentDao.getAllPaymentsSync()
-                            trySend(local)
+        if (firestore != null) {
+            scope.launch {
+                try {
+                    val uid = syncManager.getOrEnsureUid()
+                    Log.d("FirestoreSync", "Listening for Payments in Firestore at path: agents/$uid/payments")
+                    listenerRegistration = firestore.collection("agents").document(uid)
+                        .collection("payments")
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null) {
+                                Log.w("FirestoreSync", "Firestore payment listener notice for UID: $uid (${error.localizedMessage}). Local database active.")
+                                return@addSnapshotListener
+                            }
+                            if (snapshot != null) {
+                                val list = snapshot.documents.mapNotNull { doc ->
+                                    val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                                    if (id == 0L) null else PaymentEntity(
+                                        id = id,
+                                        policyId = doc.getLong("policyId") ?: 0L,
+                                        policyNumber = doc.getString("policyNumber") ?: "",
+                                        customerId = doc.getLong("customerId") ?: 0L,
+                                        customerName = doc.getString("customerName") ?: "",
+                                        paidAmount = doc.getDouble("paidAmount") ?: 0.0,
+                                        lateFee = doc.getDouble("lateFee") ?: 0.0,
+                                        paymentDate = doc.getString("paymentDate") ?: "",
+                                        paymentMode = doc.getString("paymentMode") ?: "UPI",
+                                        receiptNumber = doc.getString("receiptNumber") ?: "",
+                                        notes = doc.getString("notes") ?: "",
+                                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                                    )
+                                }
+                                if (list.isNotEmpty()) {
+                                    scope.launch {
+                                        list.forEach { paymentDao.insertPayment(it) }
+                                    }
+                                }
+                            }
                         }
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        Log.d("FirestoreSync", "Received Payment snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
-                            PaymentEntity(
-                                id = id,
-                                policyId = doc.getLong("policyId") ?: 0L,
-                                policyNumber = doc.getString("policyNumber") ?: "",
-                                customerId = doc.getLong("customerId") ?: 0L,
-                                customerName = doc.getString("customerName") ?: "",
-                                paidAmount = doc.getDouble("paidAmount") ?: 0.0,
-                                lateFee = doc.getDouble("lateFee") ?: 0.0,
-                                paymentDate = doc.getString("paymentDate") ?: "",
-                                paymentMode = doc.getString("paymentMode") ?: "UPI",
-                                receiptNumber = doc.getString("receiptNumber") ?: "",
-                                notes = doc.getString("notes") ?: "",
-                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-                            )
-                        }
-                        scope.launch {
-                            list.forEach { paymentDao.insertPayment(it) }
-                            val fullLocalList = paymentDao.getAllPaymentsSync()
-                            trySend(fullLocalList)
-                        }
-                    }
+                } catch (e: Exception) {
+                    Log.w("FirestoreSync", "Error attaching payment listener: ${e.localizedMessage}")
                 }
+            }
         }
+
         awaitClose {
-            job.cancel()
+            roomJob.cancel()
             listenerRegistration?.remove()
         }
     }
@@ -451,7 +451,7 @@ class LicRepository(
                 .collection("documents")
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        Log.e("FirestoreSync", "Firestore document listener error for UID: $uid: ${error.localizedMessage}", error)
+                        Log.w("FirestoreSync", "Firestore document listener notice for UID: $uid (${error.localizedMessage}). Falling back to local database.")
                         scope.launch {
                             val local = documentDao.getAllDocumentsSync()
                             trySend(local)
@@ -547,7 +547,7 @@ class LicRepository(
                         agencyCode = snapshot.getString("agencyCode") ?: "",
                         branchName = snapshot.getString("branchName") ?: "",
                         licenseNumber = snapshot.getString("licenseNumber") ?: "",
-                        email = snapshot.getString("email") ?: (FirebaseAuth.getInstance().currentUser?.email ?: ""),
+                        email = snapshot.getString("email") ?: (try { FirebaseAuth.getInstance().currentUser?.email } catch (_: Throwable) { null } ?: ""),
                         mobile = snapshot.getString("mobile") ?: "",
                         photoUri = snapshot.getString("photoUri") ?: "",
                         themeMode = snapshot.getString("themeMode") ?: "System",

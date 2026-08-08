@@ -600,7 +600,61 @@ private fun FilterCategorySection(
     }
 }
 
-// Stat Card with rounded corners, subtle shadow, status colors & crisp typography
+// Animated Counter Text Component for Stat Cards
+@Composable
+fun AnimatedStatNumber(
+    value: String,
+    style: TextStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, fontSize = 21.sp),
+    color: Color = MaterialTheme.colorScheme.onSurface
+) {
+    val numericValue = remember(value) {
+        value.replace("₹", "").replace(",", "").trim().toDoubleOrNull()
+    }
+
+    if (numericValue != null) {
+        val isCurrency = value.contains("₹")
+        var targetValue by remember { mutableFloatStateOf(0f) }
+        LaunchedEffect(numericValue) {
+            targetValue = numericValue.toFloat()
+        }
+        val animatedVal by animateFloatAsState(
+            targetValue = targetValue,
+            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing),
+            label = "StatNumberAnimation"
+        )
+        val formattedText = if (isCurrency) {
+            "₹${"%.0f".format(animatedVal)}"
+        } else {
+            "%.0f".format(animatedVal)
+        }
+        Text(
+            text = formattedText,
+            style = style,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    } else {
+        AnimatedContent(
+            targetState = value,
+            transitionSpec = {
+                (fadeIn(animationSpec = tween(300)) + slideInVertically { it / 2 })
+                    .togetherWith(fadeOut(animationSpec = tween(300)) + slideOutVertically { -it / 2 })
+            },
+            label = "StatTextAnimation"
+        ) { targetText ->
+            Text(
+                text = targetText,
+                style = style,
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+// Stat Card with 18dp rounded corners, subtle shadow, status colors & animated counter typography
 @Composable
 fun DashboardStatCard(
     title: String,
@@ -618,25 +672,25 @@ fun DashboardStatCard(
         modifier = modifier
             .testTag(testTag)
             .shadow(
-                elevation = 1.5.dp,
-                shape = RoundedCornerShape(16.dp),
-                spotColor = Color.Black.copy(alpha = 0.05f)
+                elevation = 2.dp,
+                shape = RoundedCornerShape(18.dp),
+                spotColor = Color.Black.copy(alpha = 0.08f)
             ),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
     ) {
         Column(
             modifier = Modifier
-                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .padding(horizontal = 14.dp, vertical = 12.dp)
                 .fillMaxWidth()
         ) {
             Box(
                 modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(iconBgColor),
                 contentAlignment = Alignment.Center
             ) {
@@ -644,27 +698,25 @@ fun DashboardStatCard(
                     imageVector = icon,
                     contentDescription = title,
                     tint = iconTintColor,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(22.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-                text = value,
+            AnimatedStatNumber(
+                value = value,
                 style = MaterialTheme.typography.titleLarge.copy(
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 21.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 22.sp,
                     color = MaterialTheme.colorScheme.onSurface
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                )
             )
 
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodySmall.copy(
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 ),

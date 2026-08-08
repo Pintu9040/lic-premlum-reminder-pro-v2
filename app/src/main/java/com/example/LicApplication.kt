@@ -21,8 +21,9 @@ class LicApplication : Application() {
         try {
             NotificationEngine.createNotificationChannel(this)
             NotificationEngine.scheduleBackgroundWorkers(this)
+            com.example.data.remote.CloudSyncWorker.schedulePeriodicSync(this)
         } catch (e: Exception) {
-            Log.e("LicApplication", "Failed to initialize NotificationEngine: ${e.localizedMessage}", e)
+            Log.e("LicApplication", "Failed to initialize NotificationEngine or CloudSyncWorker: ${e.localizedMessage}", e)
         }
     }
 

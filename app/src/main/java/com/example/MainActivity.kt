@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.data.local.CustomerEntity
 import com.example.data.local.PolicyEntity
 import com.example.ui.LicViewModel
@@ -48,6 +49,9 @@ import com.example.ui.theme.RoyalBlueContainer
 import com.example.ui.theme.AccentOrange
 import com.example.ui.theme.ErrorRed
 
+import com.example.util.BiometricAuthManager
+import com.example.util.SecurityUtils
+
 enum class AppNavigationTab {
     DASHBOARD,
     CUSTOMERS,
@@ -59,7 +63,7 @@ enum class AppNavigationTab {
     SETTINGS
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : androidx.fragment.app.FragmentActivity() {
     private val licViewModel: LicViewModel by viewModels()
     private val authViewModel: AuthViewModel by viewModels()
 
@@ -83,15 +87,38 @@ class MainActivity : ComponentActivity() {
             }
 
             var isPinUnlocked by remember { mutableStateOf(false) }
-            val pinCode = agentProfile?.pinCode ?: ""
+            val rawPinCode = agentProfile?.pinCode ?: ""
+
+            fun isPinValid(pin: String?): Boolean {
+                if (pin.isNullOrBlank()) return false
+                val trimmed = pin.trim()
+                return trimmed.length == 4 && trimmed.all { it.isDigit() }
+            }
+
+            val hasValidPin = isPinValid(rawPinCode)
+
+            LaunchedEffect(rawPinCode) {
+                if (rawPinCode.isNotBlank() && !hasValidPin) {
+                    agentProfile?.let { prof ->
+                        licViewModel.saveAgentProfile(prof.copy(pinCode = ""))
+                    }
+                }
+            }
 
             LICReminderProTheme(darkTheme = isDark) {
                 val authState by authViewModel.authState.collectAsState()
 
-                if (pinCode.isNotBlank() && !isPinUnlocked && authState is AuthState.LoggedIn) {
+                if (hasValidPin && !isPinUnlocked && authState is AuthState.LoggedIn) {
                     PinLockScreen(
-                        correctPin = pinCode,
-                        onUnlocked = { isPinUnlocked = true }
+                        correctPin = rawPinCode.trim(),
+                        agentProfile = agentProfile,
+                        onUnlocked = { isPinUnlocked = true },
+                        onResetPin = { newPinHash ->
+                            agentProfile?.let { prof ->
+                                licViewModel.saveAgentProfile(prof.copy(pinCode = newPinHash))
+                            }
+                            isPinUnlocked = true
+                        }
                     )
                 } else {
                     when (authState) {
@@ -150,6 +177,7 @@ sealed class ScreenDestination {
     object Reminders : ScreenDestination()
     object Calendar : ScreenDestination()
     object Payments : ScreenDestination()
+    data class CustomerPaymentHistory(val customer: CustomerEntity) : ScreenDestination()
     object Reports : ScreenDestination()
     object Documents : ScreenDestination()
     object Settings : ScreenDestination()
@@ -192,7 +220,7 @@ fun MainAppContent(
 
     val currentTab = when (currentDestination) {
         ScreenDestination.Dashboard -> AppNavigationTab.DASHBOARD
-        ScreenDestination.Customers, is ScreenDestination.CustomerDetail -> AppNavigationTab.CUSTOMERS
+        ScreenDestination.Customers, is ScreenDestination.CustomerDetail, is ScreenDestination.CustomerPaymentHistory -> AppNavigationTab.CUSTOMERS
         ScreenDestination.Policies, is ScreenDestination.PolicyDetail, ScreenDestination.AddPolicy -> AppNavigationTab.POLICIES
         ScreenDestination.Reminders, ScreenDestination.Calendar -> AppNavigationTab.REMINDERS
         ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
@@ -218,6 +246,7 @@ fun MainAppContent(
         topBar = {
             if (currentDestination != ScreenDestination.Dashboard &&
                 currentDestination !is ScreenDestination.CustomerDetail &&
+                currentDestination !is ScreenDestination.CustomerPaymentHistory &&
                 currentDestination !is ScreenDestination.PolicyDetail &&
                 currentDestination != ScreenDestination.Payments &&
                 currentDestination != ScreenDestination.AddPolicy
@@ -261,67 +290,52 @@ fun MainAppContent(
         bottomBar = {
             if (currentDestination != ScreenDestination.AddPolicy) {
                 NavigationBar(
-                    containerColor = RoyalBluePrimary,
-                    contentColor = Color.White
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    tonalElevation = 8.dp
                 ) {
+                    val navItemColors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = RoyalBluePrimary,
+                        selectedTextColor = RoyalBluePrimary,
+                        indicatorColor = RoyalBlueContainer,
+                        unselectedIconColor = Color(0xFF94A3B8),
+                        unselectedTextColor = Color(0xFF94A3B8)
+                    )
+
                     NavigationBarItem(
                         selected = currentTab == AppNavigationTab.DASHBOARD,
                         onClick = { navigateTo(ScreenDestination.Dashboard) },
                         icon = { Icon(Icons.Default.Dashboard, contentDescription = "Home") },
-                        label = { Text("Home") },
+                        label = { Text("Home", fontWeight = if (currentTab == AppNavigationTab.DASHBOARD) FontWeight.Bold else FontWeight.Medium) },
                         modifier = Modifier.testTag("nav_tab_dashboard"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RoyalBluePrimary,
-                            selectedTextColor = AccentOrange,
-                            indicatorColor = Color.White,
-                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
-                        )
+                        colors = navItemColors
                     )
 
                     NavigationBarItem(
                         selected = currentTab == AppNavigationTab.CUSTOMERS,
                         onClick = { navigateTo(ScreenDestination.Customers) },
                         icon = { Icon(Icons.Default.People, contentDescription = "Customers") },
-                        label = { Text("Clients") },
+                        label = { Text("Clients", fontWeight = if (currentTab == AppNavigationTab.CUSTOMERS) FontWeight.Bold else FontWeight.Medium) },
                         modifier = Modifier.testTag("nav_tab_customers"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RoyalBluePrimary,
-                            selectedTextColor = AccentOrange,
-                            indicatorColor = Color.White,
-                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
-                        )
+                        colors = navItemColors
                     )
 
                     NavigationBarItem(
                         selected = currentTab == AppNavigationTab.POLICIES,
                         onClick = { navigateTo(ScreenDestination.Policies) },
                         icon = { Icon(Icons.Default.FolderSpecial, contentDescription = "Policies") },
-                        label = { Text("Policies") },
+                        label = { Text("Policies", fontWeight = if (currentTab == AppNavigationTab.POLICIES) FontWeight.Bold else FontWeight.Medium) },
                         modifier = Modifier.testTag("nav_tab_policies"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RoyalBluePrimary,
-                            selectedTextColor = AccentOrange,
-                            indicatorColor = Color.White,
-                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
-                        )
+                        colors = navItemColors
                     )
 
                     NavigationBarItem(
                         selected = currentTab == AppNavigationTab.REMINDERS,
                         onClick = { navigateTo(ScreenDestination.Reminders) },
                         icon = { Icon(Icons.Default.NotificationsActive, contentDescription = "Reminders") },
-                        label = { Text("Reminders") },
+                        label = { Text("Reminders", fontWeight = if (currentTab == AppNavigationTab.REMINDERS) FontWeight.Bold else FontWeight.Medium) },
                         modifier = Modifier.testTag("nav_tab_reminders"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RoyalBluePrimary,
-                            selectedTextColor = AccentOrange,
-                            indicatorColor = Color.White,
-                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
-                        )
+                        colors = navItemColors
                     )
 
                     NavigationBarItem(
@@ -331,15 +345,9 @@ fun MainAppContent(
                                 currentTab == AppNavigationTab.PAYMENTS,
                         onClick = { navigateTo(ScreenDestination.Settings) },
                         icon = { Icon(Icons.Default.MoreHoriz, contentDescription = "More") },
-                        label = { Text("More") },
+                        label = { Text("More", fontWeight = if (currentTab == AppNavigationTab.SETTINGS) FontWeight.Bold else FontWeight.Medium) },
                         modifier = Modifier.testTag("nav_tab_more"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = RoyalBluePrimary,
-                            selectedTextColor = AccentOrange,
-                            indicatorColor = Color.White,
-                            unselectedIconColor = Color.White.copy(alpha = 0.75f),
-                            unselectedTextColor = Color.White.copy(alpha = 0.75f)
-                        )
+                        colors = navItemColors
                     )
                 }
             }
@@ -412,9 +420,14 @@ fun MainAppContent(
                             onNavigateToCalendar = { navigateTo(ScreenDestination.Calendar) },
                             onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
                             onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
+                            onNavigateToDocuments = { navigateTo(ScreenDestination.Documents) },
+                            onNavigateToSettings = { navigateTo(ScreenDestination.Settings) },
                             onAddCustomer = { showAddCustomerDialog = true },
                             onAddPolicy = { showAddPolicyDialog = true },
-                            onCollectPremium = { policyForPaymentCollection = it }
+                            onCollectPremium = { policyForPaymentCollection = it },
+                            onNavigateToCustomerPaymentHistory = { selectedCustomer ->
+                                navigateTo(ScreenDestination.CustomerPaymentHistory(selectedCustomer))
+                            }
                         )
                     }
 
@@ -474,6 +487,16 @@ fun MainAppContent(
 
                     is ScreenDestination.Payments -> {
                         PaymentHistoryScreen(viewModel = licViewModel)
+                    }
+
+                    is ScreenDestination.CustomerPaymentHistory -> {
+                        val cust = (currentDestination as ScreenDestination.CustomerPaymentHistory).customer
+                        val activeCust = customersList.find { it.id == cust.id } ?: cust
+                        com.example.ui.payment.CustomerPaymentHistoryScreen(
+                            customer = activeCust,
+                            viewModel = licViewModel,
+                            onBack = { handleBackPress() }
+                        )
                     }
 
                     is ScreenDestination.Reports -> {
@@ -538,6 +561,9 @@ fun MainAppContent(
                     licViewModel.updateCustomer(customer)
                 } else {
                     licViewModel.addCustomer(customer)
+                    if (currentDestination !is ScreenDestination.Customers) {
+                        navigateTo(ScreenDestination.Customers)
+                    }
                 }
                 showAddCustomerDialog = false
                 customerToEdit = null
@@ -592,10 +618,65 @@ fun MainAppContent(
 @Composable
 fun PinLockScreen(
     correctPin: String,
-    onUnlocked: () -> Unit
+    agentProfile: com.example.data.local.AgentProfileEntity?,
+    onUnlocked: () -> Unit,
+    onResetPin: (String) -> Unit
 ) {
     var enteredPin by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf("") }
+    var successMsg by remember { mutableStateOf("") }
+    var isAuthenticatingBiometric by remember { mutableStateOf(false) }
+    var showForgotDialog by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+
+    // Secure window against screenshots on Security Lock screen
+    DisposableEffect(Unit) {
+        SecurityUtils.setSecureFlag(context, true)
+        onDispose {
+            SecurityUtils.setSecureFlag(context, false)
+        }
+    }
+
+    val isBiometricAvailable = remember(context) { BiometricAuthManager.isBiometricAvailable(context) }
+    val isBiometricEnabled = remember(context) { SecurityUtils.isBiometricEnabled(context) }
+
+    fun triggerBiometricAuthentication() {
+        if (!isBiometricAvailable) {
+            errorMsg = BiometricAuthManager.getBiometricStatusMessage(context)
+            return
+        }
+
+        isAuthenticatingBiometric = true
+        errorMsg = ""
+        successMsg = "Authenticating biometrics..."
+
+        BiometricAuthManager.showBiometricPrompt(
+            context = context,
+            title = "LIC Vault Security",
+            subtitle = "Scan fingerprint or face unlock to access",
+            negativeButtonText = "Use Security PIN",
+            onSuccess = {
+                isAuthenticatingBiometric = false
+                successMsg = "Biometric Verification Succeeded!"
+                onUnlocked()
+            },
+            onError = { err ->
+                isAuthenticatingBiometric = false
+                successMsg = ""
+                if (err != "PIN_FALLBACK" && err != "Cancelled by user") {
+                    errorMsg = err
+                }
+            }
+        )
+    }
+
+    // Auto-launch biometric prompt if biometric login is enabled
+    LaunchedEffect(Unit) {
+        if (isBiometricEnabled && isBiometricAvailable) {
+            triggerBiometricAuthentication()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -606,12 +687,14 @@ fun PinLockScreen(
         Card(
             modifier = Modifier
                 .padding(24.dp)
-                .fillMaxWidth(),
+                .fillMaxWidth(0.92f)
+                .widthIn(max = 420.dp),
             shape = RoundedCornerShape(24.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.padding(28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -621,42 +704,81 @@ fun PinLockScreen(
                     modifier = Modifier.size(64.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Lock, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(32.dp))
+                        if (isAuthenticatingBiometric) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = RoyalBluePrimary,
+                                strokeWidth = 3.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "Security Lock",
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(32.dp)
+                            )
+                        }
                     }
                 }
 
                 Text(
                     text = "LIC Security Lock",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
                 )
 
                 Text(
-                    text = "Enter 4-Digit Security Passcode",
+                    text = "Enter 4-Digit Security Passcode or Scan Fingerprint",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 OutlinedTextField(
                     value = enteredPin,
-                    onValueChange = {
-                        if (it.length <= 4) {
-                            enteredPin = it
+                    onValueChange = { newValue ->
+                        if (newValue.length <= 4 && newValue.all { it.isDigit() }) {
+                            enteredPin = newValue
                             errorMsg = ""
+                            successMsg = ""
                         }
                     },
                     visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.width(180.dp)
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = RoyalBluePrimary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                    ),
+                    modifier = Modifier
+                        .width(180.dp)
+                        .testTag("pin_lock_input_field")
                 )
 
+                if (successMsg.isNotBlank()) {
+                    Text(
+                        text = successMsg,
+                        color = Color(0xFF2E7D32),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
                 if (errorMsg.isNotBlank()) {
-                    Text(errorMsg, color = ErrorRed, style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        text = errorMsg,
+                        color = ErrorRed,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
 
                 Button(
                     onClick = {
-                        if (enteredPin == correctPin) {
+                        val cleanEntered = enteredPin.trim()
+                        if (SecurityUtils.isPinValid(cleanEntered, correctPin)) {
                             onUnlocked()
                         } else {
                             errorMsg = "Incorrect Security PIN. Please retry."
@@ -664,11 +786,361 @@ fun PinLockScreen(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("unlock_vault_button")
                 ) {
-                    Text("Unlock Vault", fontWeight = FontWeight.Bold)
+                    Text("Unlock Vault", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+
+                // Biometric Fingerprint Button
+                OutlinedButton(
+                    onClick = { triggerBiometricAuthentication() },
+                    shape = RoundedCornerShape(12.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBluePrimary),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RoyalBluePrimary),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("biometric_unlock_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Fingerprint,
+                        contentDescription = "Biometric Fingerprint Unlock",
+                        tint = RoyalBluePrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Unlock with Fingerprint / Face", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+
+                TextButton(
+                    onClick = { showForgotDialog = true },
+                    modifier = Modifier.testTag("forgot_pin_button")
+                ) {
+                    Text(
+                        text = "Forgot PIN?",
+                        color = RoyalBluePrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
                 }
             }
         }
+    }
+
+    if (showForgotDialog) {
+        var recoveryStage by remember { mutableStateOf(1) } // 1: Verify Answer/Email, 2: Set New PIN
+        var recoveryAnswerInput by remember { mutableStateOf("") }
+        var newPinInput by remember { mutableStateOf("") }
+        var confirmNewPinInput by remember { mutableStateOf("") }
+
+        var recoveryError by remember { mutableStateOf("") }
+        var recoverySuccessMsg by remember { mutableStateOf("") }
+        var isSendingEmail by remember { mutableStateOf(false) }
+
+        // Secure screen against screenshots during Emergency Recovery
+        DisposableEffect(Unit) {
+            SecurityUtils.setSecureFlag(context, true)
+            onDispose {
+                SecurityUtils.setSecureFlag(context, false)
+            }
+        }
+
+        val (isLockedOut, remainingMinutes) = remember(showForgotDialog, recoveryError) {
+            SecurityUtils.checkLockoutStatus(context)
+        }
+
+        val recoveryQuestion = remember(context) { SecurityUtils.getRecoveryQuestion(context) }
+        val recoveryEmail = remember(context) {
+            val stored = SecurityUtils.getRecoveryEmail(context)
+            if (stored.isNotBlank()) stored else (agentProfile?.email ?: "")
+        }
+
+        AlertDialog(
+            onDismissRequest = { showForgotDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.VerifiedUser,
+                        contentDescription = null,
+                        tint = RoyalBluePrimary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (recoveryStage == 1) "Emergency PIN Recovery" else "Create New 4-Digit PIN",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isLockedOut) {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Emergency recovery locked due to 5 failed attempts. Please try again in $remainingMinutes minute(s).",
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    } else if (recoveryStage == 1) {
+                        Text(
+                            text = "Answer your Emergency Recovery Question to create a new passcode:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Question Card
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                            ),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                text = recoveryQuestion,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+
+                        OutlinedTextField(
+                            value = recoveryAnswerInput,
+                            onValueChange = {
+                                recoveryAnswerInput = it
+                                recoveryError = ""
+                                recoverySuccessMsg = ""
+                            },
+                            label = { Text("Your Recovery Answer") },
+                            singleLine = true,
+                            enabled = !isLockedOut,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("recovery_answer_input")
+                        )
+
+                        // Optional Firebase Email Reset Option
+                        if (recoveryEmail.isNotBlank()) {
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Send Reset Link via Email",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = recoveryEmail,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isSendingEmail) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp),
+                                        color = RoyalBluePrimary,
+                                        strokeWidth = 2.5.dp
+                                    )
+                                } else {
+                                    OutlinedButton(
+                                        onClick = {
+                                            isSendingEmail = true
+                                            recoveryError = ""
+                                            recoverySuccessMsg = ""
+                                            SecurityUtils.sendPasswordResetEmail(recoveryEmail) { success, msg ->
+                                                isSendingEmail = false
+                                                if (success) {
+                                                    recoverySuccessMsg = msg ?: "Reset email sent successfully!"
+                                                } else {
+                                                    recoveryError = msg ?: "Failed to send reset email."
+                                                }
+                                            }
+                                        },
+                                        enabled = !isLockedOut,
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.testTag("send_recovery_email_button")
+                                    ) {
+                                        Text("Send Email", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Stage 2: Create New PIN
+                        Text(
+                            text = "Enter a new 4-digit passcode for your LIC Vault:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        OutlinedTextField(
+                            value = newPinInput,
+                            onValueChange = {
+                                if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                    newPinInput = it
+                                    recoveryError = ""
+                                }
+                            },
+                            label = { Text("New 4-Digit PIN") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("new_pin_recovery_input")
+                        )
+
+                        OutlinedTextField(
+                            value = confirmNewPinInput,
+                            onValueChange = {
+                                if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                    confirmNewPinInput = it
+                                    recoveryError = ""
+                                }
+                            },
+                            label = { Text("Confirm New 4-Digit PIN") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("confirm_new_pin_recovery_input")
+                        )
+                    }
+
+                    if (recoverySuccessMsg.isNotBlank()) {
+                        Text(
+                            text = recoverySuccessMsg,
+                            color = Color(0xFF2E7D32),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    if (recoveryError.isNotBlank()) {
+                        Text(
+                            text = recoveryError,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (recoveryStage == 1) {
+                    Button(
+                        onClick = {
+                            val cleanAnswer = recoveryAnswerInput.trim()
+                            if (cleanAnswer.isBlank()) {
+                                recoveryError = "Please enter your Recovery Answer."
+                                return@Button
+                            }
+
+                            val fallbacks = listOfNotNull(
+                                agentProfile?.agencyCode,
+                                agentProfile?.email,
+                                agentProfile?.mobile,
+                                agentProfile?.agentName
+                            )
+
+                            val isValid = SecurityUtils.verifyRecoveryAnswer(context, cleanAnswer, fallbacks)
+
+                            if (isValid) {
+                                SecurityUtils.resetFailedAttempts(context)
+                                recoveryError = ""
+                                recoverySuccessMsg = ""
+                                recoveryStage = 2
+                            } else {
+                                val remaining = SecurityUtils.recordFailedAttempt(context)
+                                if (remaining > 0) {
+                                    recoveryError = "Incorrect Recovery Answer. $remaining attempt(s) remaining."
+                                } else {
+                                    recoveryError = "Too many failed attempts. Emergency recovery is locked for 30 minutes."
+                                }
+                            }
+                        },
+                        enabled = !isLockedOut,
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("verify_recovery_answer_button")
+                    ) {
+                        Text("Verify Answer", fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = {
+                            val newPin = newPinInput.trim()
+                            val confirmPin = confirmNewPinInput.trim()
+
+                            if (newPin.length != 4) {
+                                recoveryError = "PIN must be exactly 4 digits."
+                                return@Button
+                            }
+                            if (newPin != confirmPin) {
+                                recoveryError = "PINs do not match."
+                                return@Button
+                            }
+
+                            val hashedPin = SecurityUtils.hashPin(newPin)
+                            showForgotDialog = false
+                            onResetPin(hashedPin)
+                            android.widget.Toast.makeText(
+                                context,
+                                "New 4-Digit Security PIN saved successfully!",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("save_new_pin_recovery_button")
+                    ) {
+                        Text("Save New PIN & Unlock", fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showForgotDialog = false },
+                    modifier = Modifier.testTag("cancel_recovery_button")
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

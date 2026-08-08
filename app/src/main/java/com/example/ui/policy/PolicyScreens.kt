@@ -2,6 +2,7 @@ package com.example.ui.policy
 
 import android.content.Intent
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,13 +19,20 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import kotlinx.coroutines.launch
 import com.example.ui.components.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -48,6 +56,8 @@ import com.example.ui.payment.PaymentCollectionDialog
 import com.example.ui.components.*
 import com.example.ui.customer.DetailItem
 import com.example.ui.theme.*
+import com.example.util.NoMatchingRecordsEmptyState
+import com.example.util.SearchFilterEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -274,7 +284,12 @@ fun PolicyListScreen(
         policies.count { it.dueDate == todayStr || it.status.equals("Due", ignoreCase = true) }
     }
 
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -559,12 +574,24 @@ fun PolicyListScreen(
             }
         }
     ) { padding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                viewModel.refreshData { success, msg ->
+                    scope.launch {
+                        snackbarHostState.showSnackbar(msg)
+                    }
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.background)
         ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+            ) {
 // SEARCH & FILTERS HEADER SECTION
             Surface(
                 color = RoyalBluePrimary,
@@ -785,13 +812,20 @@ fun PolicyListScreen(
                     }
                 }
                 policies.isEmpty() -> {
-                    StandardEmptyState(
-                        title = "No Policies Found",
-                        description = "No policies match your search or selected filter. Tap '+ Add Policy' to create a new record.",
-                        icon = Icons.Outlined.FolderOff,
-                        actionLabel = "Add First Policy",
-                        onActionClick = onAddPolicy
-                    )
+                    if (searchQuery.isNotBlank() || statusFilter != PolicyFilterStatus.ALL || dueFilter != PolicyFilterDue.ALL || modeFilter != PolicyModeFilter.ALL) {
+                        NoMatchingRecordsEmptyState(
+                            query = searchQuery,
+                            onResetFilters = { viewModel.clearAllFilters() }
+                        )
+                    } else {
+                        StandardEmptyState(
+                            title = "No Policies Found",
+                            description = "No policy records found in database. Tap '+ Add Policy' to create a new record.",
+                            icon = Icons.Outlined.FolderOff,
+                            actionLabel = "Add First Policy",
+                            onActionClick = onAddPolicy
+                        )
+                    }
                 }
                 else -> {
                     LazyColumn(
@@ -1056,7 +1090,8 @@ fun PolicyListScreen(
             }
         )
     }
-}
+        }
+    }
 
 @Composable
 fun PolicyListSkeletonLoader() {
@@ -1534,6 +1569,7 @@ fun PolicyDetailScreen(
     }
 
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var showDeleteConfirm by remember { mutableStateOf(false) }
     val (planNameOnly, planCode) = remember(policy.planName) { parsePlanDetails(policy.planName) }
 
@@ -1725,7 +1761,20 @@ fun PolicyDetailScreen(
                             PrimaryActionButton(
                                 text = "Generate Report",
                                 onClick = {
-                                    sharePolicySummaryText(context, policy, customer, policyPayments)
+                                    coroutineScope.launch {
+                                        val agentProfile = viewModel.agentProfile.value
+                                        val reportData = com.example.pdf.PdfReportData(
+                                            reportType = com.example.pdf.ReportType.POLICY_DETAILS,
+                                            agentProfile = agentProfile,
+                                            customer = customer,
+                                            policy = policy,
+                                            paymentList = policyPayments
+                                        )
+                                        val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                        res.onSuccess { file ->
+                                            com.example.pdf.PdfReportGenerator.openPdf(context, file)
+                                        }
+                                    }
                                 },
                                 icon = Icons.Default.PictureAsPdf,
                                 modifier = Modifier.weight(1f),
@@ -1835,6 +1884,7 @@ fun PolicyFormField(
     isRequired: Boolean = false,
     singleLine: Boolean = true,
     maxLines: Int = 1,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     isError: Boolean = false,
     errorMessage: String? = null,
     trailingIcon: @Composable (() -> Unit)? = null,
@@ -1870,6 +1920,7 @@ fun PolicyFormField(
                 trailingIcon = trailingIcon,
                 singleLine = singleLine,
                 maxLines = maxLines,
+                keyboardOptions = keyboardOptions,
                 readOnly = readOnly,
                 isError = isError,
                 shape = RoundedCornerShape(12.dp),
@@ -2012,7 +2063,17 @@ fun AddEditPolicyDialog(
             "Jeevan Shanti (858)",
             "Nivesh Plus (849)",
             "Jeevan Lakshya (933)",
-            "Single Premium Endowment (917)"
+            "Single Premium Endowment (917)",
+            "Jeevan Azad (868)",
+            "Jeevan Amar (855)",
+            "Dhan Sanchay (865)",
+            "Dhan Rekha (863)",
+            "Jeevan Utsav (871)",
+            "Amritbaal (874)",
+            "Jeevan Samarth (873)",
+            "Index Plus (873)",
+            "Bima Shree (948)",
+            "Jeevan Shiromani (947)"
         )
     }
 
@@ -2073,11 +2134,12 @@ fun AddEditPolicyDialog(
     ) {
         Surface(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
+                .fillMaxWidth(0.95f)
                 .fillMaxHeight(0.92f)
-                .shadow(16.dp, RoundedCornerShape(24.dp)),
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
+                .shadow(24.dp, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = Color(0xFF1E293B),
+            border = BorderStroke(1.5.dp, Color(0xFF334155))
         ) {
             Column(
                 modifier = Modifier
@@ -2091,41 +2153,70 @@ fun AddEditPolicyDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = if (initialPolicy == null) "Add Policy Record" else "Edit Policy Info",
-                            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(5.dp)
+                                    .height(24.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(Brush.verticalGradient(listOf(Color(0xFF2563EB), Color(0xFF1D4ED8))))
+                            )
+                            Text(
+                                text = if (initialPolicy == null) "Add Policy Record" else "Edit Policy Info",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp
+                                ),
+                                color = Color.White
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = when (currentStep) {
                                 1 -> "Step 1 of 3: Policy Basics"
                                 2 -> "Step 2 of 3: Policy Details"
                                 else -> "Step 3 of 3: Review & Save"
                             },
-                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-                            color = RoyalBluePrimary
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 12.sp
+                            ),
+                            color = Color(0xFF60A5FA)
                         )
                     }
                     IconButton(
                         onClick = { if (!isSaving) onDismiss() },
                         enabled = !isSaving
                     ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = Color(0xFF94A3B8)
+                        )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
-                // Stepper Header Bar
+                // Step Indicator Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val steps = listOf("1. Basics", "2. Details", "3. Review")
                     steps.forEachIndexed { index, title ->
                         val stepNum = index + 1
                         val isCurrent = currentStep == stepNum
                         val isCompleted = currentStep > stepNum
+
+                        val bgBrush = when {
+                            isCurrent -> Brush.horizontalGradient(listOf(Color(0xFF2563EB), Color(0xFF1D4ED8)))
+                            isCompleted -> Brush.horizontalGradient(listOf(Color(0xFF10B981), Color(0xFF059669)))
+                            else -> Brush.horizontalGradient(listOf(Color(0xFF334155), Color(0xFF334155)))
+                        }
 
                         Surface(
                             onClick = {
@@ -2135,29 +2226,32 @@ fun AddEditPolicyDialog(
                                     }
                                 }
                             },
-                            shape = RoundedCornerShape(20.dp),
-                            color = when {
-                                isCurrent -> RoyalBluePrimary
-                                isCompleted -> EmeraldGreenSecondary
-                                else -> MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            modifier = Modifier.weight(1f)
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color.Transparent,
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(bgBrush, RoundedCornerShape(16.dp))
                         ) {
                             Row(
-                                modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 6.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (isCompleted) {
-                                    Icon(Icons.Default.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                                    Icon(
+                                        Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(4.dp))
                                 }
                                 Text(
                                     text = title,
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = FontWeight.Bold,
-                                        color = if (isCurrent || isCompleted) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 11.sp
+                                        color = if (isCurrent || isCompleted) Color.White else Color(0xFF94A3B8),
+                                        fontSize = 11.5.sp
                                     ),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -2179,130 +2273,210 @@ fun AddEditPolicyDialog(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
                         when (currentStep) {
                             1 -> {
                                 // STEP 1: Policy Basics
-                                Text(
-                                    "Select Customer *",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        "Select Customer *",
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    )
 
-                                // Searchable Customer Selection Box
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                        border = androidx.compose.foundation.BorderStroke(
-                                            1.dp,
-                                            if (customerError != null) ErrorRed else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-                                        ),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Column(modifier = Modifier.padding(12.dp)) {
-                                            if (selectedCustomer != null && !showCustomerPickerDropdown) {
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    horizontalArrangement = Arrangement.SpaceBetween
-                                                ) {
-                                                    Row(
-                                                        verticalAlignment = Alignment.CenterVertically,
-                                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                                    ) {
-                                                        CustomerAvatar(name = selectedCustomer!!.name, size = 40.dp)
-                                                        Column {
-                                                            Text(
-                                                                selectedCustomer!!.name,
-                                                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold)
-                                                            )
-                                                            Text(
-                                                                "Mobile: ${selectedCustomer!!.mobile}",
-                                                                style = MaterialTheme.typography.bodySmall,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                        }
-                                                    }
-                                                    OutlinedButton(
-                                                        onClick = { showCustomerPickerDropdown = true },
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                                    ) {
-                                                        Text("Change", style = MaterialTheme.typography.labelSmall)
-                                                    }
-                                                }
-                                            } else {
-                                                // Search Customer Input
-                                                OutlinedTextField(
-                                                    value = customerSearchQuery,
-                                                    onValueChange = {
-                                                        customerSearchQuery = it
-                                                        customerError = null
-                                                    },
-                                                    label = { Text("Search Customer Name or Phone") },
-                                                    leadingIcon = { Icon(Icons.Default.PersonSearch, contentDescription = null, tint = RoyalBluePrimary) },
-                                                    trailingIcon = {
-                                                        if (customerSearchQuery.isNotBlank()) {
-                                                            IconButton(onClick = { customerSearchQuery = "" }) {
-                                                                Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                                            }
-                                                        }
-                                                    },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    shape = RoundedCornerShape(10.dp)
+                                    // Customer Selection Component
+                                    if (selectedCustomer != null && !showCustomerPickerDropdown) {
+                                        // Selected Customer Card with "Change Customer" button
+                                        Surface(
+                                            shape = RoundedCornerShape(16.dp),
+                                            color = Color.Transparent,
+                                            border = BorderStroke(1.5.dp, Color(0xFF60A5FA)),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(
+                                                    brush = Brush.horizontalGradient(listOf(Color(0xFF2563EB), Color(0xFF1D4ED8))),
+                                                    shape = RoundedCornerShape(16.dp)
                                                 )
-
-                                                Spacer(modifier = Modifier.height(8.dp))
-
-                                                val filteredCustomers = customersList.filter { cust ->
-                                                    customerSearchQuery.isBlank() ||
-                                                            cust.name.contains(customerSearchQuery, ignoreCase = true) ||
-                                                            cust.mobile.contains(customerSearchQuery)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .padding(12.dp)
+                                                    .fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.weight(1f),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                ) {
+                                                    CustomerAvatar(name = selectedCustomer!!.name, size = 40.dp)
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Text(
+                                                            selectedCustomer!!.name,
+                                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color.White
+                                                            ),
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                        Text(
+                                                            "Mobile: ${selectedCustomer!!.mobile}",
+                                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                                fontSize = 12.sp,
+                                                                color = Color(0xFFCBD5E1)
+                                                            ),
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
                                                 }
-
-                                                if (filteredCustomers.isEmpty()) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        showCustomerPickerDropdown = true
+                                                        customerSearchQuery = ""
+                                                    },
+                                                    shape = RoundedCornerShape(12.dp),
+                                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.8f)),
+                                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                                ) {
                                                     Text(
-                                                        "No customers found. Please add a customer first.",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = ErrorRed,
-                                                        modifier = Modifier.padding(4.dp)
+                                                        "Change Customer",
+                                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                                                     )
-                                                } else {
-                                                    Column(
-                                                        modifier = Modifier
-                                                            .fillMaxWidth()
-                                                            .heightIn(max = 160.dp)
-                                                            .verticalScroll(rememberScrollState()),
-                                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Customer Search Field
+                                        OutlinedTextField(
+                                            value = customerSearchQuery,
+                                            onValueChange = {
+                                                customerSearchQuery = it
+                                                customerError = null
+                                            },
+                                            placeholder = {
+                                                Text(
+                                                    "Search customer name or mobile...",
+                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                        fontSize = 13.sp,
+                                                        color = Color(0xFF94A3B8)
+                                                    )
+                                                )
+                                            },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.PersonSearch,
+                                                    contentDescription = null,
+                                                    tint = Color.White
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                if (customerSearchQuery.isNotBlank()) {
+                                                    IconButton(onClick = { customerSearchQuery = "" }) {
+                                                        Icon(
+                                                            Icons.Default.Clear,
+                                                            contentDescription = "Clear",
+                                                            tint = Color(0xFF94A3B8)
+                                                        )
+                                                    }
+                                                } else if (selectedCustomer != null) {
+                                                    IconButton(onClick = { showCustomerPickerDropdown = false }) {
+                                                        Icon(
+                                                            Icons.Default.Close,
+                                                            contentDescription = "Cancel",
+                                                            tint = Color(0xFF94A3B8)
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            singleLine = true,
+                                            shape = RoundedCornerShape(16.dp),
+                                            colors = OutlinedTextFieldDefaults.colors(
+                                                focusedBorderColor = Color(0xFF2563EB),
+                                                unfocusedBorderColor = Color(0xFF334155),
+                                                focusedContainerColor = Color(0xFF0F172A),
+                                                unfocusedContainerColor = Color(0xFF0F172A),
+                                                focusedTextColor = Color.White,
+                                                unfocusedTextColor = Color.White
+                                            ),
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        // Customer Search List Options
+                                        val filteredCustomers = customersList.filter { cust ->
+                                            customerSearchQuery.isBlank() ||
+                                                    cust.name.contains(customerSearchQuery, ignoreCase = true) ||
+                                                    cust.mobile.contains(customerSearchQuery)
+                                        }
+
+                                        if (filteredCustomers.isEmpty()) {
+                                            Text(
+                                                "No matching customers found. Please check spelling or add a client.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = ErrorRed,
+                                                modifier = Modifier.padding(4.dp)
+                                            )
+                                        } else {
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(max = 160.dp)
+                                                    .verticalScroll(rememberScrollState()),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                filteredCustomers.take(8).forEach { cust ->
+                                                    val isSelected = selectedCustomer?.id == cust.id
+                                                    Surface(
+                                                        onClick = {
+                                                            selectedCustomer = cust
+                                                            showCustomerPickerDropdown = false
+                                                            customerError = null
+                                                        },
+                                                        shape = RoundedCornerShape(14.dp),
+                                                        color = if (isSelected) Color(0xFF2563EB).copy(alpha = 0.25f) else Color(0xFF0F172A),
+                                                        border = BorderStroke(
+                                                            1.dp,
+                                                            if (isSelected) Color(0xFF2563EB) else Color(0xFF334155)
+                                                        ),
+                                                        modifier = Modifier.fillMaxWidth()
                                                     ) {
-                                                        filteredCustomers.take(8).forEach { cust ->
-                                                            Surface(
-                                                                onClick = {
-                                                                    selectedCustomer = cust
-                                                                    showCustomerPickerDropdown = false
-                                                                    customerError = null
-                                                                },
-                                                                shape = RoundedCornerShape(8.dp),
-                                                                color = if (selectedCustomer?.id == cust.id) RoyalBlueContainer else Color.Transparent,
-                                                                modifier = Modifier.fillMaxWidth()
-                                                            ) {
-                                                                Row(
-                                                                    modifier = Modifier.padding(8.dp),
-                                                                    verticalAlignment = Alignment.CenterVertically,
-                                                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                                                ) {
-                                                                    CustomerAvatar(name = cust.name, size = 32.dp)
-                                                                    Column(modifier = Modifier.weight(1f)) {
-                                                                        Text(cust.name, style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold))
-                                                                        Text("Mob: ${cust.mobile}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                                                    }
-                                                                    if (selectedCustomer?.id == cust.id) {
-                                                                        Icon(Icons.Default.Check, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
-                                                                    }
-                                                                }
+                                                        Row(
+                                                            modifier = Modifier.padding(10.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                                        ) {
+                                                            CustomerAvatar(name = cust.name, size = 32.dp)
+                                                            Column(modifier = Modifier.weight(1f)) {
+                                                                Text(
+                                                                    cust.name,
+                                                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = Color.White
+                                                                    )
+                                                                )
+                                                                Text(
+                                                                    "Mob: ${cust.mobile}",
+                                                                    style = MaterialTheme.typography.bodySmall.copy(
+                                                                        color = Color(0xFF94A3B8)
+                                                                    )
+                                                                )
+                                                            }
+                                                            if (isSelected) {
+                                                                Icon(
+                                                                    Icons.Default.Check,
+                                                                    contentDescription = null,
+                                                                    tint = Color(0xFF60A5FA),
+                                                                    modifier = Modifier.size(20.dp)
+                                                                )
                                                             }
                                                         }
                                                     }
@@ -2310,89 +2484,104 @@ fun AddEditPolicyDialog(
                                             }
                                         }
                                     }
+
                                     if (customerError != null) {
                                         Text(
                                             customerError!!,
                                             color = ErrorRed,
-                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
                                             modifier = Modifier.padding(start = 12.dp, top = 2.dp)
                                         )
                                     }
                                 }
 
+                                // Policy Number Input with numeric keyboard & duplicate checking
                                 PolicyFormField(
                                     value = policyNumber,
                                     onValueChange = {
                                         policyNumber = it
-                                        policyNumberError = null
+                                        val isDuplicate = existingPolicies.any { p ->
+                                            p.policyNumber.trim().equals(it.trim(), ignoreCase = true) &&
+                                                    p.id != (initialPolicy?.id ?: 0L)
+                                        }
+                                        if (isDuplicate) {
+                                            policyNumberError = "Duplicate Policy Number! Already exists in records."
+                                        } else {
+                                            policyNumberError = null
+                                        }
                                     },
                                     label = "Policy Number",
                                     leadingIcon = Icons.Default.ReceiptLong,
                                     placeholder = "e.g. 123456789",
                                     isRequired = true,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     isError = policyNumberError != null,
                                     errorMessage = policyNumberError,
                                     testTag = "add_policy_number_input"
                                 )
 
-                                // Autocomplete Plan Input
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Box(modifier = Modifier.fillMaxWidth()) {
-                                        PolicyFormField(
-                                            value = planName,
-                                            onValueChange = {
-                                                planName = it
-                                                showPlanDropdown = true
-                                                planError = null
-                                            },
-                                            label = "LIC Plan Name & Code",
-                                            leadingIcon = Icons.Default.Assignment,
-                                            placeholder = "e.g. Jeevan Labh (936)",
-                                            isRequired = true,
-                                            isError = planError != null,
-                                            errorMessage = planError,
-                                            trailingIcon = {
-                                                IconButton(onClick = { showPlanDropdown = !showPlanDropdown }) {
-                                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Show plans")
-                                                }
-                                            },
-                                            testTag = "add_policy_plan_input"
-                                        )
+                                // Searchable Material3 ExposedDropdownMenu for LIC Plan
+                                ExposedDropdownMenuBox(
+                                    expanded = showPlanDropdown && filteredPlans.isNotEmpty(),
+                                    onExpandedChange = { showPlanDropdown = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    PolicyFormField(
+                                        value = planName,
+                                        onValueChange = {
+                                            planName = it
+                                            showPlanDropdown = true
+                                            planError = null
+                                        },
+                                        label = "LIC Plan Name & Code",
+                                        leadingIcon = Icons.Default.Assignment,
+                                        placeholder = "e.g. Jeevan Labh (936)",
+                                        isRequired = true,
+                                        isError = planError != null,
+                                        errorMessage = planError,
+                                        trailingIcon = {
+                                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = showPlanDropdown)
+                                        },
+                                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true),
+                                        testTag = "add_policy_plan_input"
+                                    )
 
-                                        DropdownMenu(
-                                            expanded = showPlanDropdown && filteredPlans.isNotEmpty(),
-                                            onDismissRequest = { showPlanDropdown = false },
-                                            modifier = Modifier.fillMaxWidth(0.85f)
-                                        ) {
-                                            filteredPlans.forEach { p ->
-                                                DropdownMenuItem(
-                                                    text = { Text(p, style = MaterialTheme.typography.bodyMedium) },
-                                                    onClick = {
-                                                        planName = p
-                                                        showPlanDropdown = false
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    // Quick plan suggestion chips
-                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        items(listOf("Jeevan Labh (936)", "Jeevan Umang (945)", "Endowment (914)", "Money Back (920)", "Tech Term (854)")) { suggestion ->
-                                            SuggestionChip(
+                                    ExposedDropdownMenu(
+                                        expanded = showPlanDropdown && filteredPlans.isNotEmpty(),
+                                        onDismissRequest = { showPlanDropdown = false },
+                                        modifier = Modifier
+                                            .background(Color(0xFF1E293B))
+                                            .border(1.dp, Color(0xFF334155), RoundedCornerShape(16.dp))
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .heightIn(max = 240.dp)
+                                    ) {
+                                        filteredPlans.forEach { p ->
+                                            val isSelected = planName.equals(p, ignoreCase = true)
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = p,
+                                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                            color = if (isSelected) Color(0xFF60A5FA) else Color.White
+                                                        )
+                                                    )
+                                                },
                                                 onClick = {
-                                                    planName = suggestion
+                                                    planName = p
                                                     showPlanDropdown = false
                                                 },
-                                                label = { Text(suggestion, style = MaterialTheme.typography.labelSmall) }
+                                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding,
+                                                modifier = Modifier.background(if (isSelected) Color(0xFF2563EB).copy(alpha = 0.2f) else Color.Transparent)
                                             )
                                         }
                                     }
                                 }
 
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
                                     PolicyFormField(
                                         value = premiumAmountStr,
                                         onValueChange = {
@@ -2401,8 +2590,9 @@ fun AddEditPolicyDialog(
                                         },
                                         label = "Premium (₹)",
                                         leadingIcon = Icons.Default.AttachMoney,
-                                        placeholder = "10000",
+                                        placeholder = "24500",
                                         isRequired = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         isError = premiumError != null,
                                         errorMessage = premiumError,
                                         modifier = Modifier.weight(1f),
@@ -2419,29 +2609,84 @@ fun AddEditPolicyDialog(
                                         leadingIcon = Icons.Default.Shield,
                                         placeholder = "500000",
                                         isRequired = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                         isError = sumAssuredError != null,
                                         errorMessage = sumAssuredError,
                                         modifier = Modifier.weight(1f)
                                     )
                                 }
 
-                                Column {
+                                // Premium Payment Mode (Equal width weight(1f), height 48dp, Green selected)
+                                Column(modifier = Modifier.fillMaxWidth()) {
                                     Text(
                                         "Premium Payment Mode",
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
                                     )
-                                    Spacer(modifier = Modifier.height(6.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
                                         modeOptions.forEach { mode ->
-                                            FilterChip(
-                                                selected = premiumMode == mode,
+                                            val isSelected = premiumMode == mode
+
+                                            val animatedBgColor by animateColorAsState(
+                                                targetValue = if (isSelected) Color(0xFF10B981) else Color(0xFF0F172A),
+                                                animationSpec = tween(durationMillis = 200),
+                                                label = "modeBg"
+                                            )
+                                            val animatedBorderColor by animateColorAsState(
+                                                targetValue = if (isSelected) Color(0xFF34D399) else Color(0xFF334155),
+                                                animationSpec = tween(durationMillis = 200),
+                                                label = "modeBorder"
+                                            )
+
+                                            Surface(
                                                 onClick = {
                                                     premiumMode = mode
                                                     autoRecalculateDates(issueDate, mode, policyTermStr)
                                                 },
-                                                label = { Text(mode, style = MaterialTheme.typography.labelSmall) }
-                                            )
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = animatedBgColor,
+                                                border = BorderStroke(1.dp, animatedBorderColor),
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(48.dp)
+                                                    .clip(RoundedCornerShape(12.dp))
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .padding(horizontal = 2.dp),
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.Center
+                                                ) {
+                                                    if (isSelected) {
+                                                        Icon(
+                                                            Icons.Default.Check,
+                                                            contentDescription = null,
+                                                            tint = Color.White,
+                                                            modifier = Modifier.size(13.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(2.dp))
+                                                    }
+                                                    Text(
+                                                        text = mode,
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                            color = if (isSelected) Color.White else Color(0xFF94A3B8),
+                                                            fontSize = 11.sp,
+                                                            textAlign = TextAlign.Center
+                                                        ),
+                                                        maxLines = 1,
+                                                        softWrap = false,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -2736,25 +2981,46 @@ fun AddEditPolicyDialog(
                 // Sticky Bottom Action Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (currentStep == 1) {
-                        TextButton(
+                        OutlinedButton(
                             onClick = { if (!isSaving) onDismiss() },
-                            enabled = !isSaving
+                            enabled = !isSaving,
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.5.dp, Color(0xFF334155)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
                         ) {
-                            Text("Cancel")
+                            Text(
+                                text = "Cancel",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            )
                         }
                     } else {
                         OutlinedButton(
                             onClick = { currentStep -= 1 },
                             enabled = !isSaving,
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.5.dp, Color(0xFF334155)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Back")
+                            Text(
+                                text = "Back",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            )
                         }
                     }
 
@@ -2808,11 +3074,14 @@ fun AddEditPolicyDialog(
                                     currentStep = 3
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                            shape = RoundedCornerShape(12.dp)
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
                         ) {
-                            Text("Next Step")
-                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Next Step", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(16.dp))
                         }
                     } else {
@@ -2879,9 +3148,12 @@ fun AddEditPolicyDialog(
                                 }
                             },
                             enabled = !isSaving,
-                            colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreenSecondary),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.testTag("save_policy_button")
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2563EB)),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("save_policy_button")
                         ) {
                             if (isSaving) {
                                 CircularProgressIndicator(
@@ -2890,11 +3162,11 @@ fun AddEditPolicyDialog(
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Saving Policy...")
+                                Text("Saving...")
                             } else {
                                 Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Save Policy", fontWeight = FontWeight.Bold)
+                                Text("Save Policy", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold))
                             }
                         }
                     }

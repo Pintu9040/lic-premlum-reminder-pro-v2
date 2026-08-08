@@ -5,10 +5,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface CustomerDao {
-    @Query("SELECT * FROM customers ORDER BY name ASC")
+    @Query("SELECT * FROM customers ORDER BY createdAt DESC, id DESC")
     fun getAllCustomers(): Flow<List<CustomerEntity>>
 
-    @Query("SELECT * FROM customers ORDER BY name ASC")
+    @Query("SELECT * FROM customers ORDER BY createdAt DESC, id DESC")
     suspend fun getAllCustomersSync(): List<CustomerEntity>
 
     @Query("SELECT * FROM customers WHERE id = :id")

@@ -8,6 +8,9 @@ interface FollowUpDao {
     @Query("SELECT * FROM follow_ups ORDER BY date ASC, time ASC")
     fun getAllFollowUps(): Flow<List<FollowUpEntity>>
 
+    @Query("SELECT * FROM follow_ups ORDER BY date ASC, time ASC")
+    suspend fun getAllFollowUpsSync(): List<FollowUpEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFollowUp(followUp: FollowUpEntity): Long
 

@@ -59,6 +59,11 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        suspend fun repopulateDemoData(db: AppDatabase) {
+            db.clearAllTables()
+            populateInitialData(db)
+        }
+
         private suspend fun populateInitialData(db: AppDatabase) {
             val agentDao = db.agentDao()
             val customerDao = db.customerDao()

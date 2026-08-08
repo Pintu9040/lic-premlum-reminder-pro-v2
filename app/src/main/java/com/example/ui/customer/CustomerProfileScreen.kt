@@ -5,17 +5,20 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -37,16 +40,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.local.CustomerEntity
+import com.example.data.local.PaymentEntity
+import com.example.data.local.PolicyEntity
 import com.example.ui.LicViewModel
+import com.example.ui.payment.*
+import com.example.ui.theme.*
+import com.example.util.NoMatchingRecordsEmptyState
 import kotlinx.coroutines.launch
+import java.net.URLEncoder
+import java.time.LocalDate
 
-// Royal Blue Dark Theme Palette
+// Theme Palette Tokens for V2 Interface
 private val DarkBackground = Color(0xFF0B1120)
 private val DarkCardSurface = Color(0xFF1E293B)
 private val DarkCardSurfaceVariant = Color(0xFF0F172A)
 private val RoyalBluePrimary = Color(0xFF1D4ED8)
 private val RoyalBlueLight = Color(0xFF3B82F6)
-private val RoyalBlueGlow = Color(0xFF2563EB)
 private val EmeraldGreen = Color(0xFF10B981)
 private val EmeraldGreenContainer = Color(0xFF064E3B)
 private val AmberDue = Color(0xFFF59E0B)
@@ -56,35 +65,8 @@ private val CrimsonOverdueContainer = Color(0xFF7F1D1D)
 private val TextWhite = Color(0xFFF8FAFC)
 private val TextMuted = Color(0xFF94A3B8)
 private val BorderSlate = Color(0xFF334155)
-
-// Data Models for UI Presentation
-data class ProfilePolicyModel(
-    val id: Long,
-    val planName: String,
-    val policyNumber: String,
-    val premiumAmount: Double,
-    val premiumMode: String,
-    val dueDate: String,
-    val status: String, // "Active", "Due", "Overdue"
-    val yearsPaid: Int,
-    val totalYears: Int
-)
-
-data class ProfilePaymentModel(
-    val id: Long,
-    val date: String,
-    val amount: Double,
-    val mode: String,
-    val receiptNo: String
-)
-
-data class ProfileDocumentModel(
-    val id: Long,
-    val title: String,
-    val docType: String,
-    val status: String,
-    val isUploaded: Boolean
-)
+private val AccentOrange = Color(0xFFF97316)
+private val AccentOrangeContainer = Color(0xFF7C2D12)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,38 +78,93 @@ fun CustomerProfileScreen(
     onBack: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    // Default Sample Customer Data if null
-    val displayCustomer = remember(customer) {
-        customer ?: CustomerEntity(
-            id = 101L,
-            name = "Rajesh Kumar Sharma",
-            mobile = "+91 98765 43210",
-            whatsapp = "+91 98765 43210",
-            dob = "15/08/1982",
-            address = "Flat 402, Royal Palms Apartments, M.G. Road, Sector 14, Gurgaon, Haryana - 122001",
-            occupation = "Senior Business Consultant",
-            pan = "ABCDE1234F",
-            aadhaar = "9876 5432 1098",
-            notes = "VIP Client. Prefers morning appointments between 10 AM and 12 PM."
-        )
+    // Collect real Room DB data from ViewModel if available
+    val allCustomers by viewModel?.customers?.collectAsState() ?: remember { mutableStateOf(emptyList()) }
+    val allPolicies by viewModel?.policies?.collectAsState() ?: remember { mutableStateOf(emptyList()) }
+    val allPayments by viewModel?.payments?.collectAsState() ?: remember { mutableStateOf(emptyList()) }
+    val agentProfile by viewModel?.agentProfile?.collectAsState() ?: remember { mutableStateOf(null) }
+
+    // Resolve current customer (real database or fallback sample)
+    val currentCustomer = remember(customer, allCustomers) {
+        if (customer != null) {
+            allCustomers.find { it.id == customer.id } ?: customer
+        } else if (allCustomers.isNotEmpty()) {
+            allCustomers.first()
+        } else {
+            CustomerEntity(
+                id = 101L,
+                name = "Rajesh Kumar Sharma",
+                mobile = "+91 98765 43210",
+                whatsapp = "+91 98765 43210",
+                dob = "15/08/1982",
+                address = "Flat 402, Royal Palms Apartments, M.G. Road, Sector 14, Gurgaon, Haryana - 122001",
+                occupation = "Senior Business Consultant",
+                pan = "ABCDE1234F",
+                aadhaar = "9876 5432 1098",
+                notes = "VIP Client. Prefers morning appointments between 10 AM and 12 PM."
+            )
+        }
+    }
+
+    // Derived policies and payments for this customer
+    val customerPolicies = remember(currentCustomer.id, allPolicies) {
+        allPolicies.filter { it.customerId == currentCustomer.id }
+    }
+
+    val customerPayments = remember(currentCustomer.id, allPayments, customerPolicies) {
+        val policyIds = customerPolicies.map { it.id }.toSet()
+        allPayments.filter { it.customerId == currentCustomer.id || policyIds.contains(it.policyId) }
+            .sortedByDescending { it.paymentDate }
+    }
+
+    // Derived primary policy details
+    val primaryPolicy = customerPolicies.firstOrNull()
+    val policyNumberStr = if (customerPolicies.isNotEmpty()) {
+        customerPolicies.joinToString(", ") { it.policyNumber }
+    } else {
+        "POL-867452901"
+    }
+
+    val planNameStr = primaryPolicy?.planName ?: "Jeevan Umang (Plan 945)"
+    val totalPremiumAmount = if (customerPolicies.isNotEmpty()) {
+        customerPolicies.sumOf { it.premiumAmount }
+    } else {
+        12500.0
+    }
+
+    val primaryPremiumMode = primaryPolicy?.premiumMode ?: "Yearly"
+    val primaryNextDueDate = primaryPolicy?.dueDate ?: "15 Aug 2026"
+
+    // Outstanding balance & payment status calculations
+    val totalPaidAmount = customerPayments.sumOf { it.paidAmount }
+    val outstandingBalance = (totalPremiumAmount - totalPaidAmount).coerceAtLeast(0.0)
+
+    val overallPaymentStatus = when {
+        outstandingBalance <= 0.0 -> "Paid"
+        totalPaidAmount > 0.0 -> "Partial"
+        else -> "Pending"
     }
 
     // Interactive Dialog States
     var showMoreMenu by remember { mutableStateOf(false) }
-    var selectedPolicyForCollect by remember { mutableStateOf<ProfilePolicyModel?>(null) }
-    var selectedPolicyForDetail by remember { mutableStateOf<ProfilePolicyModel?>(null) }
-    var selectedPaymentForReceipt by remember { mutableStateOf<ProfilePaymentModel?>(null) }
-    var showUploadDocDialog by remember { mutableStateOf(false) }
+    var showRecordPaymentDialog by remember { mutableStateOf(false) }
+    var showDeleteCustomerDialog by remember { mutableStateOf(false) }
+    var selectedPaymentForDetails by remember { mutableStateOf<PaymentEntity?>(null) }
+    var editingPayment by remember { mutableStateOf<PaymentEntity?>(null) }
+    var deletingPayment by remember { mutableStateOf<PaymentEntity?>(null) }
 
-    // Snackbar and Photo Picker States
-    val snackbarHostState = remember { SnackbarHostState() }
-    val coroutineScope = rememberCoroutineScope()
+    // Search and Filter state for Payment History
+    var paymentSearchQuery by remember { mutableStateOf("") }
+    var activeFilterChip by remember { mutableStateOf("All") } // "All", "Paid", "Partial", "Pending", "This Month"
 
-    var selectedPhotoUri by remember(displayCustomer.id, displayCustomer.photoUri) {
+    // Profile Photo Picker State
+    var selectedPhotoUri by remember(currentCustomer.id, currentCustomer.photoUri) {
         val prefs = context.getSharedPreferences("customer_photos", Context.MODE_PRIVATE)
-        val savedUri = prefs.getString("customer_photo_${displayCustomer.id}", null)
-        mutableStateOf(savedUri ?: displayCustomer.photoUri)
+        val savedUri = prefs.getString("customer_photo_${currentCustomer.id}", null)
+        mutableStateOf(savedUri ?: currentCustomer.photoUri)
     }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -138,17 +175,15 @@ fun CustomerProfileScreen(
                 val flag = Intent.FLAG_GRANT_READ_URI_PERMISSION
                 context.contentResolver.takePersistableUriPermission(uri, flag)
             } catch (e: Exception) {
-                // Ignore if takePersistableUriPermission is not supported by uri provider
+                // Ignore if takePersistableUriPermission is not supported by provider
             }
             val uriStr = uri.toString()
             selectedPhotoUri = uriStr
 
-            // Save to ViewModel if available
-            viewModel?.updateCustomer(displayCustomer.copy(photoUri = uriStr))
+            viewModel?.updateCustomer(currentCustomer.copy(photoUri = uriStr))
 
-            // Save to SharedPreferences for offline persistence
             val prefs = context.getSharedPreferences("customer_photos", Context.MODE_PRIVATE)
-            prefs.edit().putString("customer_photo_${displayCustomer.id}", uriStr).apply()
+            prefs.edit().putString("customer_photo_${currentCustomer.id}", uriStr).apply()
 
             coroutineScope.launch {
                 snackbarHostState.showSnackbar("Profile photo updated successfully.")
@@ -156,82 +191,57 @@ fun CustomerProfileScreen(
         }
     }
 
+    // Filtered Payment History list based on search and selected filter chip
+    val filteredCustomerPayments = remember(customerPayments, paymentSearchQuery, activeFilterChip, primaryPolicy) {
+        val today = LocalDate.now()
+        val currentMonth = today.monthValue
+        val currentYear = today.year
+
+        customerPayments.filter { payment ->
+            val remainingBal = getRemainingBalanceForPayment(payment, primaryPolicy, customerPayments)
+            val isFullyPaid = remainingBal <= 0.0
+            val isPartial = !isFullyPaid && payment.paidAmount > 0.0
+            val paymentStatus = when {
+                isFullyPaid -> "Paid"
+                isPartial -> "Partial"
+                else -> "Pending"
+            }
+
+            val pDate = try { LocalDate.parse(payment.paymentDate) } catch (e: Exception) { null }
+
+            // Search Filter
+            val matchesQuery = paymentSearchQuery.isBlank() ||
+                    payment.paymentDate.contains(paymentSearchQuery, ignoreCase = true) ||
+                    payment.paidAmount.toString().contains(paymentSearchQuery) ||
+                    payment.paymentMode.contains(paymentSearchQuery, ignoreCase = true) ||
+                    payment.receiptNumber.contains(paymentSearchQuery, ignoreCase = true) ||
+                    paymentStatus.contains(paymentSearchQuery, ignoreCase = true)
+
+            // Chip Filter
+            val matchesChip = when (activeFilterChip) {
+                "All" -> true
+                "Paid" -> paymentStatus == "Paid"
+                "Partial" -> paymentStatus == "Partial"
+                "Pending" -> paymentStatus == "Pending"
+                "This Month" -> pDate != null && pDate.monthValue == currentMonth && pDate.year == currentYear
+                "Cash" -> payment.paymentMode.contains("Cash", ignoreCase = true)
+                "UPI" -> payment.paymentMode.contains("UPI", ignoreCase = true)
+                "Bank" -> payment.paymentMode.contains("Bank", ignoreCase = true) || payment.paymentMode.contains("Net", ignoreCase = true)
+                "Cheque" -> payment.paymentMode.contains("Cheque", ignoreCase = true)
+                else -> true
+            }
+
+            matchesQuery && matchesChip
+        }
+    }
+
+    // Active row overflow menu state
+    var activeRowMenuId by remember { mutableStateOf<Long?>(null) }
+
     // Screen Entrance Animation State
     var isVisible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         isVisible = true
-    }
-
-    // Sample Policies List
-    val samplePolicies = remember {
-        listOf(
-            ProfilePolicyModel(
-                id = 1L,
-                planName = "Jeevan Umang (Plan 945)",
-                policyNumber = "867452901",
-                premiumAmount = 12500.0,
-                premiumMode = "Yearly",
-                dueDate = "15 Aug 2026",
-                status = "Active",
-                yearsPaid = 8,
-                totalYears = 20
-            ),
-            ProfilePolicyModel(
-                id = 2L,
-                planName = "Jeevan Lakshya (Plan 933)",
-                policyNumber = "741258963",
-                premiumAmount = 8400.0,
-                premiumMode = "Half-Yearly",
-                dueDate = "28 Aug 2026",
-                status = "Due",
-                yearsPaid = 5,
-                totalYears = 15
-            ),
-            ProfilePolicyModel(
-                id = 3L,
-                planName = "Jeevan Labh (Plan 936)",
-                policyNumber = "963852741",
-                premiumAmount = 15000.0,
-                premiumMode = "Yearly",
-                dueDate = "10 Jul 2026",
-                status = "Overdue",
-                yearsPaid = 12,
-                totalYears = 21
-            ),
-            ProfilePolicyModel(
-                id = 4L,
-                planName = "Endowment Plan (Plan 914)",
-                policyNumber = "321654987",
-                premiumAmount = 6200.0,
-                premiumMode = "Quarterly",
-                dueDate = "01 Nov 2026",
-                status = "Active",
-                yearsPaid = 10,
-                totalYears = 16
-            )
-        )
-    }
-
-    // Sample Payments Timeline
-    val samplePayments = remember {
-        listOf(
-            ProfilePaymentModel(1L, "15 Jul 2025", 12500.0, "UPI (GPay)", "REC-2025-0891"),
-            ProfilePaymentModel(2L, "28 Feb 2025", 8400.0, "Net Banking", "REC-2025-0312"),
-            ProfilePaymentModel(3L, "14 Jul 2024", 12500.0, "Cheque (#40129)", "REC-2024-0744"),
-            ProfilePaymentModel(4L, "25 Feb 2024", 8400.0, "Cash", "REC-2024-0199")
-        )
-    }
-
-    // Sample Documents Vault
-    var documentsList by remember {
-        mutableStateOf(
-            listOf(
-                ProfileDocumentModel(1L, "Aadhaar Card", "Aadhaar", "Verified", true),
-                ProfileDocumentModel(2L, "PAN Card", "PAN", "Verified", true),
-                ProfileDocumentModel(3L, "Jeevan Umang Policy Bond", "Policy Bond", "Attached", true),
-                ProfileDocumentModel(4L, "Nominee Declaration Form", "Nominee Form", "Verified", true)
-            )
-        )
     }
 
     Scaffold(
@@ -247,7 +257,7 @@ fun CustomerProfileScreen(
                             color = TextWhite,
                             fontSize = 20.sp
                         )
-                    );
+                    )
                 },
                 navigationIcon = {
                     IconButton(
@@ -285,25 +295,88 @@ fun CustomerProfileScreen(
                             onDismissRequest = { showMoreMenu = false },
                             modifier = Modifier.background(DarkCardSurface)
                         ) {
+                            // 📄 Export PDF Report
                             DropdownMenuItem(
-                                text = { Text("Share Profile", color = TextWhite) },
+                                text = { Text("Export PDF Report", color = TextWhite, fontSize = 14.sp) },
+                                leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = AmberDue) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    val pdfText = "LIC CUSTOMER STATEMENT\n" +
+                                            "====================================\n" +
+                                            "Customer: ${currentCustomer.name}\n" +
+                                            "Mobile: ${currentCustomer.mobile}\n" +
+                                            "Address: ${currentCustomer.address}\n" +
+                                            "Policy Number: $policyNumberStr\n" +
+                                            "Plan Name: $planNameStr\n" +
+                                            "Premium Amount: ₹${"%.0f".format(totalPremiumAmount)}\n" +
+                                            "Next Due Date: $primaryNextDueDate\n" +
+                                            "Outstanding Balance: ₹${"%.0f".format(outstandingBalance)}\n" +
+                                            "====================================\n" +
+                                            "Total Payments Recorded: ${customerPayments.size}\n" +
+                                            "Total Paid: ₹${"%.0f".format(totalPaidAmount)}"
+
+                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                        putExtra(Intent.EXTRA_TEXT, pdfText)
+                                        type = "text/plain"
+                                    }
+                                    context.startActivity(Intent.createChooser(shareIntent, "Export Statement PDF"))
+                                }
+                            )
+
+                            // 📊 Export Excel / CSV
+                            DropdownMenuItem(
+                                text = { Text("Export Excel / CSV", color = TextWhite, fontSize = 14.sp) },
+                                leadingIcon = { Icon(Icons.Default.TableChart, contentDescription = null, tint = EmeraldGreen) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    exportPaymentHistoryToCsv(
+                                        context = context,
+                                        customerName = currentCustomer.name,
+                                        payments = customerPayments,
+                                        policies = customerPolicies
+                                    )
+                                    Toast.makeText(context, "Exported payment history CSV", Toast.LENGTH_SHORT).show()
+                                }
+                            )
+
+                            // 📤 Share Statement
+                            DropdownMenuItem(
+                                text = { Text("Share Statement", color = TextWhite, fontSize = 14.sp) },
                                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = RoyalBlueLight) },
                                 onClick = {
                                     showMoreMenu = false
-                                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                        putExtra(Intent.EXTRA_TEXT, "Customer: ${displayCustomer.name}\nMobile: ${displayCustomer.mobile}\nPolicies: ${samplePolicies.size}")
+                                    val shareText = "LIC Customer Statement\n" +
+                                            "Customer: ${currentCustomer.name}\n" +
+                                            "Mobile: ${currentCustomer.mobile}\n" +
+                                            "Policy: $policyNumberStr\n" +
+                                            "Outstanding Balance: ₹${"%.0f".format(outstandingBalance)}"
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        putExtra(Intent.EXTRA_TEXT, shareText)
                                         type = "text/plain"
                                     }
-                                    context.startActivity(Intent.createChooser(shareIntent, "Share Customer Profile"))
+                                    context.startActivity(Intent.createChooser(intent, "Share Customer Statement"))
                                 }
                             )
+
                             HorizontalDivider(color = BorderSlate)
+
+                            // ✏ Edit Customer
                             DropdownMenuItem(
-                                text = { Text("Delete Customer", color = CrimsonOverdue) },
+                                text = { Text("Edit Customer", color = TextWhite, fontSize = 14.sp) },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = RoyalBlueLight) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    onEditCustomer()
+                                }
+                            )
+
+                            // 🗑 Delete Customer
+                            DropdownMenuItem(
+                                text = { Text("Delete Customer", color = CrimsonOverdue, fontSize = 14.sp) },
                                 leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = CrimsonOverdue) },
                                 onClick = {
                                     showMoreMenu = false
-                                    Toast.makeText(context, "Delete option triggered for ${displayCustomer.name}", Toast.LENGTH_SHORT).show()
+                                    showDeleteCustomerDialog = true
                                 }
                             )
                         }
@@ -314,62 +387,6 @@ fun CustomerProfileScreen(
                     titleContentColor = TextWhite
                 )
             )
-        },
-        bottomBar = {
-            // BOTTOM STICKY BUTTON: Add New Policy
-            Surface(
-                color = DarkBackground,
-                border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.5f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp)
-                ) {
-                    Button(
-                        onClick = onAddPolicyForCustomer,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                            .shadow(16.dp, shape = RoundedCornerShape(28.dp), ambientColor = RoyalBlueGlow, spotColor = RoyalBlueGlow)
-                            .testTag("add_new_policy_button"),
-                        shape = RoundedCornerShape(28.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.horizontalGradient(
-                                        colors = listOf(RoyalBluePrimary, RoyalBlueLight)
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.AddCard,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Add New Policy",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
     ) { innerPadding ->
         AnimatedVisibility(
@@ -379,33 +396,33 @@ fun CustomerProfileScreen(
                 animationSpec = tween(400)
             )
         ) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp)
             ) {
 
-                // ==================== 1. HEADER CARD ====================
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(8.dp, shape = RoundedCornerShape(20.dp), spotColor = Color.Black.copy(alpha = 0.3f))
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
+                // ==================== 1. TOP HEADER ====================
+                item {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
+                        border = BorderStroke(1.dp, BorderSlate),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .shadow(8.dp, shape = RoundedCornerShape(20.dp), spotColor = Color.Black.copy(alpha = 0.3f))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            // Large Circular Avatar with Photo Upload & Initials fallback
+                            // Circular Customer Photo
                             Box(
                                 modifier = Modifier
-                                    .size(72.dp)
+                                    .size(80.dp)
                                     .testTag("customer_avatar_container")
                             ) {
                                 Box(
@@ -436,43 +453,78 @@ fun CustomerProfileScreen(
                                             contentScale = ContentScale.Crop
                                         )
                                     } else {
-                                        val initials = remember(displayCustomer.name) {
-                                            displayCustomer.name.split(" ")
+                                        val initials = remember(currentCustomer.name) {
+                                            currentCustomer.name.split(" ")
                                                 .take(2)
                                                 .mapNotNull { it.firstOrNull()?.uppercase() }
                                                 .joinToString("")
-                                                .ifEmpty { "RK" }
+                                                .ifEmpty { "C" }
                                         }
                                         Text(
                                             text = initials,
                                             style = MaterialTheme.typography.headlineMedium.copy(
                                                 color = Color.White,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 26.sp
+                                                fontSize = 28.sp
                                             )
                                         )
                                     }
                                 }
-
                             }
 
-                            Spacer(modifier = Modifier.width(16.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = displayCustomer.name,
-                                    style = MaterialTheme.typography.titleLarge.copy(
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = TextWhite,
-                                        fontSize = 20.sp
-                                    ),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                            // Customer Name (Bold)
+                            Text(
+                                text = currentCustomer.name,
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextWhite,
+                                    fontSize = 22.sp
+                                ),
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            // Mobile Number (Clickable to Dial)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clickable {
+                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${currentCustomer.mobile}"))
+                                        context.startActivity(intent)
+                                    }
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "Call Mobile",
+                                    tint = RoyalBlueLight,
+                                    modifier = Modifier.size(16.dp)
                                 )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = currentCustomer.mobile,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        color = TextWhite,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 14.sp
+                                    )
+                                )
+                            }
 
-                                Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
 
-                                // Status Badge
+                            // Compact Status Chips: Active Policy, Premium Mode, Paid / Partial / Pending
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // 1. Active Policy Chip
                                 Surface(
                                     color = EmeraldGreenContainer,
                                     shape = RoundedCornerShape(50.dp),
@@ -490,7 +542,7 @@ fun CustomerProfileScreen(
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
-                                            text = "Active Customer",
+                                            text = "Active Policy",
                                             style = MaterialTheme.typography.labelSmall.copy(
                                                 color = EmeraldGreen,
                                                 fontWeight = FontWeight.Bold,
@@ -499,246 +551,283 @@ fun CustomerProfileScreen(
                                         )
                                     }
                                 }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // 2. Premium Mode Chip
+                                Surface(
+                                    color = DarkCardSurfaceVariant,
+                                    shape = RoundedCornerShape(50.dp),
+                                    border = BorderStroke(1.dp, RoyalBlueLight.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = primaryPremiumMode,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = RoyalBlueLight,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(8.dp))
+
+                                // 3. Payment Status Chip (Paid / Partial / Pending)
+                                val (statusColor, statusBg) = when (overallPaymentStatus) {
+                                    "Paid" -> EmeraldGreen to EmeraldGreenContainer
+                                    "Partial" -> AmberDue to AmberDueContainer
+                                    else -> CrimsonOverdue to CrimsonOverdueContainer
+                                }
+
+                                Surface(
+                                    color = statusBg,
+                                    shape = RoundedCornerShape(50.dp),
+                                    border = BorderStroke(1.dp, statusColor.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = overallPaymentStatus,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            color = statusColor,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 11.sp
+                                        ),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                         }
+                    }
+                }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider(color = BorderSlate.copy(alpha = 0.6f))
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Contact Details Row: Mobile & WhatsApp
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                // ==================== 2. CUSTOMER INFORMATION CARD ====================
+                item {
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
+                            border = BorderStroke(1.dp, BorderSlate),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            // Mobile Clickable
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clickable {
-                                        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${displayCustomer.mobile}"))
-                                        context.startActivity(intent)
-                                    }
-                                    .padding(vertical = 4.dp)
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Phone,
-                                    contentDescription = "Call Mobile",
-                                    tint = RoyalBlueLight,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = displayCustomer.mobile,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        color = TextWhite,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 13.sp
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(end = 60.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Customer Details",
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = TextWhite,
+                                            fontSize = 17.sp
+                                        )
                                     )
-                                )
-                            }
+                                }
 
-                            // WhatsApp Clickable
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .clickable {
-                                        val cleanNum = displayCustomer.whatsapp.replace(Regex("[^0-9]"), "")
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$cleanNum"))
-                                        context.startActivity(intent)
-                                    }
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Chat,
-                                    contentDescription = "WhatsApp",
-                                    tint = EmeraldGreen,
-                                    modifier = Modifier.size(16.dp)
+                                HorizontalDivider(color = BorderSlate.copy(alpha = 0.6f))
+
+                                // 👤 Customer Name
+                                InfoRow(
+                                    icon = Icons.Default.Person,
+                                    label = "Customer Name",
+                                    value = currentCustomer.name
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "WhatsApp",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        color = EmeraldGreen,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
-                                    )
+
+                                // 📱 Mobile Number
+                                InfoRow(
+                                    icon = Icons.Default.Phone,
+                                    label = "Mobile Number",
+                                    value = currentCustomer.mobile
+                                )
+
+                                // 🏠 Address
+                                InfoRow(
+                                    icon = Icons.Default.Home,
+                                    label = "Address",
+                                    value = currentCustomer.address
+                                )
+
+                                // 🛡 Policy Number
+                                InfoRow(
+                                    icon = Icons.Default.Shield,
+                                    label = "Policy Number",
+                                    value = policyNumberStr
+                                )
+
+                                // 📋 Plan Name
+                                InfoRow(
+                                    icon = Icons.Default.Assignment,
+                                    label = "Plan Name",
+                                    value = planNameStr
+                                )
+
+                                // 💰 Premium Amount
+                                InfoRow(
+                                    icon = Icons.Default.AttachMoney,
+                                    label = "Premium Amount",
+                                    value = "₹ ${"%.0f".format(totalPremiumAmount)}",
+                                    valueColor = RoyalBlueLight
+                                )
+
+                                // 🔄 Premium Mode
+                                InfoRow(
+                                    icon = Icons.Default.Autorenew,
+                                    label = "Premium Mode",
+                                    value = primaryPremiumMode
+                                )
+
+                                // 📅 Next Due Date
+                                InfoRow(
+                                    icon = Icons.Default.Event,
+                                    label = "Next Due Date",
+                                    value = primaryNextDueDate,
+                                    valueColor = AmberDue
+                                )
+
+                                // ⚠ Outstanding Balance
+                                InfoRow(
+                                    icon = Icons.Default.Warning,
+                                    label = "Outstanding Balance",
+                                    value = "₹ ${"%.0f".format(outstandingBalance)}",
+                                    valueColor = if (outstandingBalance > 0) CrimsonOverdue else EmeraldGreen
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // Address Row (2 lines)
-                        Row(verticalAlignment = Alignment.Top) {
+                        // Top Right 56dp Circular Orange FAB for Add Payment
+                        FloatingActionButton(
+                            onClick = { showRecordPaymentDialog = true },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(top = 10.dp, end = 10.dp)
+                                .size(56.dp)
+                                .testTag("info_card_top_right_add_payment_fab"),
+                            shape = CircleShape,
+                            containerColor = AccentOrange,
+                            contentColor = Color.White,
+                            elevation = FloatingActionButtonDefaults.elevation(
+                                defaultElevation = 6.dp,
+                                pressedElevation = 12.dp
+                            )
+                        ) {
                             Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = "Address",
-                                tint = TextMuted,
-                                modifier = Modifier.size(16.dp).padding(top = 2.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = displayCustomer.address,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = TextMuted,
-                                    lineHeight = 18.sp,
-                                    fontSize = 12.sp
-                                ),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add Payment",
+                                modifier = Modifier.size(24.dp),
+                                tint = Color.White
                             )
                         }
                     }
                 }
 
-                // ==================== 2. QUICK ACTION BUTTONS ====================
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Call Quick Action
-                    QuickActionButton(
-                        icon = Icons.Default.Call,
-                        label = "Call",
-                        containerColor = DarkCardSurface,
-                        contentColor = RoyalBlueLight,
-                        borderColor = RoyalBluePrimary.copy(alpha = 0.6f),
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${displayCustomer.mobile}"))
-                            context.startActivity(intent)
-                        }
-                    )
-
-                    // WhatsApp Quick Action
-                    QuickActionButton(
-                        icon = Icons.Default.Chat,
-                        label = "WhatsApp",
-                        containerColor = DarkCardSurface,
-                        contentColor = EmeraldGreen,
-                        borderColor = EmeraldGreen.copy(alpha = 0.6f),
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            val cleanNum = displayCustomer.whatsapp.replace(Regex("[^0-9]"), "")
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$cleanNum"))
-                            context.startActivity(intent)
-                        }
-                    )
-
-                    // Add Policy Quick Action
-                    QuickActionButton(
-                        icon = Icons.Default.AddCard,
-                        label = "Add Policy",
-                        containerColor = RoyalBluePrimary,
-                        contentColor = Color.White,
-                        borderColor = Color.Transparent,
-                        modifier = Modifier.weight(1f),
-                        onClick = onAddPolicyForCustomer
-                    )
-
-                    // Collect Premium Quick Action
-                    QuickActionButton(
-                        icon = Icons.Default.Payments,
-                        label = "Collect",
-                        containerColor = EmeraldGreen,
-                        contentColor = Color.White,
-                        borderColor = Color.Transparent,
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            selectedPolicyForCollect = samplePolicies.firstOrNull { it.status == "Due" || it.status == "Overdue" } ?: samplePolicies.first()
-                        }
-                    )
-                }
-
-                // ==================== 3. SUMMARY CARDS (2x2 GRID) ====================
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        SummaryCard(
-                            icon = Icons.Default.FolderSpecial,
-                            iconTint = RoyalBlueLight,
-                            value = "${samplePolicies.size}",
-                            label = "Total Policies",
-                            subtitle = "Registered",
-                            modifier = Modifier.weight(1f)
-                        )
-                        SummaryCard(
-                            icon = Icons.Default.CheckCircle,
-                            iconTint = EmeraldGreen,
-                            value = "${samplePolicies.count { it.status == "Active" }}",
-                            label = "Active Policies",
-                            subtitle = "In-Force",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        SummaryCard(
-                            icon = Icons.Default.Schedule,
-                            iconTint = AmberDue,
-                            value = "₹ 23,400",
-                            label = "Due Premium",
-                            subtitle = "1 Policy Due",
-                            modifier = Modifier.weight(1f)
-                        )
-                        SummaryCard(
-                            icon = Icons.Default.MonetizationOn,
-                            iconTint = EmeraldGreen,
-                            value = "₹ 1,85,000",
-                            label = "Total Collected",
-                            subtitle = "Lifetime",
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                HorizontalDivider(color = BorderSlate.copy(alpha = 0.6f), modifier = Modifier.padding(vertical = 4.dp))
-
-                // ==================== 4. POLICY LIST ====================
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                // ==================== 3. QUICK ACTIONS GRID (2 COLUMNS) ====================
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(
-                            text = "Linked Policies (${samplePolicies.size})",
+                            text = "Quick Actions",
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = TextWhite,
                                 fontSize = 17.sp
                             )
                         )
-                        TextButton(onClick = onAddPolicyForCustomer) {
-                            Text("+ Add Policy", color = RoyalBlueLight, fontWeight = FontWeight.Bold)
-                        }
-                    }
 
-                    samplePolicies.forEach { policy ->
-                        ProfilePolicyCard(
-                            policy = policy,
-                            onCollect = { selectedPolicyForCollect = policy },
-                            onDetails = { selectedPolicyForDetail = policy },
-                            onReceipt = {
-                                selectedPaymentForReceipt = samplePayments.first()
-                            }
-                        )
+                        // 2-Column Grid Row 1
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // 1. Call Customer
+                            QuickActionGridCard(
+                                icon = Icons.Default.Call,
+                                label = "Call Customer",
+                                containerColor = DarkCardSurface,
+                                contentColor = RoyalBlueLight,
+                                borderColor = BorderSlate,
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${currentCustomer.mobile}"))
+                                    context.startActivity(intent)
+                                }
+                            )
+
+                            // 2. WhatsApp Reminder
+                            QuickActionGridCard(
+                                icon = Icons.Default.Chat,
+                                label = "WhatsApp Reminder",
+                                containerColor = DarkCardSurface,
+                                contentColor = EmeraldGreen,
+                                borderColor = BorderSlate,
+                                modifier = Modifier.weight(1f),
+                                onClick = {
+                                    val cleanNum = currentCustomer.whatsapp.ifBlank { currentCustomer.mobile }
+                                        .replace(Regex("[^0-9]"), "")
+                                    val formattedPhone = if (cleanNum.length == 10) "91$cleanNum" else cleanNum
+
+                                    val msg = viewModel?.generatePremiumReminderMsg(
+                                        customerName = currentCustomer.name,
+                                        policyNo = policyNumberStr,
+                                        planName = planNameStr,
+                                        amount = totalPremiumAmount,
+                                        dueDate = primaryNextDueDate,
+                                        outstandingBalance = outstandingBalance
+                                    ) ?: "Dear ${currentCustomer.name}, your LIC premium of ₹${"%.0f".format(totalPremiumAmount)} is due on $primaryNextDueDate."
+
+                                    try {
+                                        val intent = Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://api.whatsapp.com/send?phone=$formattedPhone&text=${URLEncoder.encode(msg, "UTF-8")}")
+                                        )
+                                        context.startActivity(intent)
+                                    } catch (e: Exception) {
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            putExtra(Intent.EXTRA_TEXT, msg)
+                                            type = "text/plain"
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, "Share Reminder"))
+                                    }
+                                }
+                            )
+                        }
+
+                        // 2-Column Grid Row 2
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // 3. Edit Customer
+                            QuickActionGridCard(
+                                icon = Icons.Default.Edit,
+                                label = "Edit Customer",
+                                containerColor = DarkCardSurface,
+                                contentColor = RoyalBlueLight,
+                                borderColor = BorderSlate,
+                                modifier = Modifier.weight(1f),
+                                onClick = onEditCustomer
+                            )
+
+                            // 4. Delete Customer
+                            QuickActionGridCard(
+                                icon = Icons.Default.Delete,
+                                label = "Delete Customer",
+                                containerColor = DarkCardSurface,
+                                contentColor = CrimsonOverdue,
+                                borderColor = CrimsonOverdueContainer,
+                                modifier = Modifier.weight(1f),
+                                onClick = { showDeleteCustomerDialog = true }
+                            )
+                        }
                     }
                 }
 
-                // ==================== 5. PAYMENT HISTORY (TIMELINE) ====================
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
+                // ==================== 4. PAYMENT HISTORY SECTION & STICKY SEARCH BAR + CHIPS ====================
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -753,7 +842,7 @@ fun CustomerProfileScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Payment History",
+                                    text = "Payment History (${filteredCustomerPayments.size})",
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.Bold,
                                         color = TextWhite,
@@ -761,181 +850,349 @@ fun CustomerProfileScreen(
                                     )
                                 )
                             }
-                            Surface(
-                                color = DarkCardSurfaceVariant,
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text(
-                                    text = "${samplePayments.size} Receipts",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = TextMuted,
-                                        fontSize = 11.sp
-                                    ),
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                )
-                            }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        // Sticky Search Bar
+                        OutlinedTextField(
+                            value = paymentSearchQuery,
+                            onValueChange = { paymentSearchQuery = it },
+                            placeholder = { Text("Search payment...", fontSize = 13.sp, color = TextMuted) },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = RoyalBlueLight) },
+                            trailingIcon = {
+                                if (paymentSearchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { paymentSearchQuery = "" }) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Clear", tint = TextMuted)
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedContainerColor = DarkCardSurface,
+                                unfocusedContainerColor = DarkCardSurface,
+                                focusedBorderColor = RoyalBlueLight,
+                                unfocusedBorderColor = BorderSlate,
+                                focusedTextColor = TextWhite,
+                                unfocusedTextColor = TextWhite
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("payment_history_sticky_search")
+                        )
 
-                        // Timeline Items
-                        samplePayments.forEachIndexed { index, payment ->
-                            TimelineItem(
-                                payment = payment,
-                                isLast = index == samplePayments.lastIndex,
-                                onViewReceipt = { selectedPaymentForReceipt = payment }
-                            )
-                        }
-                    }
-                }
-
-                // ==================== 6. DOCUMENTS VAULT CARD ====================
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(18.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                        // Material 3 Filter Chips: All, Paid, Partial, Pending, This Month, Cash, UPI, Bank, Cheque
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.FolderShared,
-                                    contentDescription = null,
-                                    tint = RoyalBlueLight,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Documents Vault",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = TextWhite,
-                                        fontSize = 17.sp
+                            val chips = listOf("All", "Paid", "Partial", "Pending", "This Month", "Cash", "UPI", "Bank", "Cheque")
+                            items(chips) { chipLabel ->
+                                val isSelected = activeFilterChip == chipLabel
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = { activeFilterChip = chipLabel },
+                                    label = {
+                                        Text(
+                                            text = chipLabel,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                        )
+                                    },
+                                    shape = RoundedCornerShape(20.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = RoyalBluePrimary,
+                                        selectedLabelColor = Color.White,
+                                        containerColor = DarkCardSurface,
+                                        labelColor = TextMuted
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = isSelected,
+                                        borderColor = if (isSelected) RoyalBlueLight else BorderSlate
                                     )
                                 )
-                            }
-                            OutlinedButton(
-                                onClick = { showUploadDocDialog = true },
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, RoyalBlueLight),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                                modifier = Modifier.height(32.dp)
-                            ) {
-                                Icon(Icons.Default.Upload, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(14.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Upload", color = RoyalBlueLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        documentsList.forEach { doc ->
-                            DocumentRowItem(doc = doc)
-                            if (doc != documentsList.last()) {
-                                Spacer(modifier = Modifier.height(8.dp))
                             }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                // ==================== 5. PAYMENT HISTORY TABLE ====================
+                if (filteredCustomerPayments.isEmpty()) {
+                    item {
+                        NoMatchingRecordsEmptyState(
+                            query = paymentSearchQuery,
+                            onResetFilters = {
+                                paymentSearchQuery = ""
+                                activeFilterChip = "All"
+                            }
+                        )
+                    }
+                } else {
+                    item {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
+                            border = BorderStroke(1.dp, BorderSlate),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .shadow(4.dp, shape = RoundedCornerShape(16.dp), spotColor = Color.Black.copy(alpha = 0.2f))
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                // Scrollable Table Container
+                                val tableScrollState = rememberScrollState()
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(tableScrollState)
+                                ) {
+                                    // Table Header Row
+                                    Row(
+                                        modifier = Modifier
+                                            .background(DarkCardSurfaceVariant)
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("📅 Date", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = RoyalBlueLight, fontSize = 12.sp), modifier = Modifier.width(95.dp))
+                                        Text("💰 Paid Amount", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = EmeraldGreen, fontSize = 12.sp, textAlign = TextAlign.End), modifier = Modifier.width(105.dp))
+                                        Text("⚠ Outstanding", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = CrimsonOverdue, fontSize = 12.sp, textAlign = TextAlign.End), modifier = Modifier.width(110.dp))
+                                        Text("💳 Mode", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TextWhite, fontSize = 12.sp), modifier = Modifier.width(85.dp))
+                                        Text("🟢 Status", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = TextWhite, fontSize = 12.sp, textAlign = TextAlign.Center), modifier = Modifier.width(90.dp))
+                                        Spacer(modifier = Modifier.width(40.dp)) // Action Column Space
+                                    }
+
+                                    HorizontalDivider(color = BorderSlate)
+
+                                    // Table Rows
+                                    filteredCustomerPayments.forEachIndexed { index, payment ->
+                                        val remainingBal = getRemainingBalanceForPayment(payment, primaryPolicy, customerPayments)
+                                        val isFullyPaid = remainingBal <= 0.0
+                                        val isPartial = !isFullyPaid && payment.paidAmount > 0.0
+                                        val statusText = when {
+                                            isFullyPaid -> "Paid"
+                                            isPartial -> "Partial"
+                                            else -> "Pending"
+                                        }
+
+                                        val rowBg = if (index % 2 == 0) DarkCardSurface else DarkCardSurfaceVariant
+
+                                        Row(
+                                            modifier = Modifier
+                                                .background(rowBg)
+                                                .clickable { selectedPaymentForDetails = payment }
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            // Date
+                                            Text(
+                                                text = payment.paymentDate,
+                                                style = MaterialTheme.typography.bodySmall.copy(color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+                                                modifier = Modifier.width(95.dp),
+                                                maxLines = 1
+                                            )
+
+                                            // Paid Amount (Right Aligned)
+                                            Text(
+                                                text = "₹${"%.0f".format(payment.paidAmount)}",
+                                                style = MaterialTheme.typography.bodySmall.copy(color = EmeraldGreen, fontWeight = FontWeight.Bold, fontSize = 12.sp, textAlign = TextAlign.End),
+                                                modifier = Modifier.width(105.dp),
+                                                maxLines = 1
+                                            )
+
+                                            // Outstanding Balance (Right Aligned)
+                                            Text(
+                                                text = "₹${"%.0f".format(remainingBal.coerceAtLeast(0.0))}",
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    color = if (remainingBal > 0) CrimsonOverdue else TextMuted,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp,
+                                                    textAlign = TextAlign.End
+                                                ),
+                                                modifier = Modifier.width(110.dp),
+                                                maxLines = 1
+                                            )
+
+                                            // Payment Mode
+                                            Text(
+                                                text = payment.paymentMode,
+                                                style = MaterialTheme.typography.bodySmall.copy(color = TextMuted, fontSize = 11.sp),
+                                                modifier = Modifier.width(85.dp),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+
+                                            // Status Chip
+                                            Box(
+                                                modifier = Modifier.width(90.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                val (statusColor, statusBg) = when (statusText) {
+                                                    "Paid" -> EmeraldGreen to EmeraldGreenContainer
+                                                    "Partial" -> AmberDue to AmberDueContainer
+                                                    else -> CrimsonOverdue to CrimsonOverdueContainer
+                                                }
+
+                                                Surface(
+                                                    color = statusBg,
+                                                    shape = RoundedCornerShape(50.dp),
+                                                    border = BorderStroke(1.dp, statusColor.copy(alpha = 0.5f))
+                                                ) {
+                                                    Text(
+                                                        text = statusText,
+                                                        style = MaterialTheme.typography.labelSmall.copy(
+                                                            color = statusColor,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 10.sp
+                                                        ),
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                            }
+
+                                            // ⋮ More Menu
+                                            Box(modifier = Modifier.width(40.dp), contentAlignment = Alignment.Center) {
+                                                IconButton(
+                                                    onClick = { activeRowMenuId = payment.id },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.MoreVert,
+                                                        contentDescription = "Row Options",
+                                                        tint = TextMuted,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+
+                                                DropdownMenu(
+                                                    expanded = activeRowMenuId == payment.id,
+                                                    onDismissRequest = { activeRowMenuId = null },
+                                                    modifier = Modifier.background(DarkCardSurface)
+                                                ) {
+                                                    // ✏ Edit
+                                                    DropdownMenuItem(
+                                                        text = { Text("Edit", color = TextWhite, fontSize = 13.sp) },
+                                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(16.dp)) },
+                                                        onClick = {
+                                                            activeRowMenuId = null
+                                                            editingPayment = payment
+                                                        }
+                                                    )
+
+                                                    // 🗑 Delete
+                                                    DropdownMenuItem(
+                                                        text = { Text("Delete", color = CrimsonOverdue, fontSize = 13.sp) },
+                                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = CrimsonOverdue, modifier = Modifier.size(16.dp)) },
+                                                        onClick = {
+                                                            activeRowMenuId = null
+                                                            deletingPayment = payment
+                                                        }
+                                                    )
+
+                                                    // 📄 Export PDF
+                                                    DropdownMenuItem(
+                                                        text = { Text("Export PDF", color = TextWhite, fontSize = 13.sp) },
+                                                        leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = AmberDue, modifier = Modifier.size(16.dp)) },
+                                                        onClick = {
+                                                            activeRowMenuId = null
+                                                            val pdfText = generateReceiptShareText(
+                                                                payment = payment,
+                                                                agentName = agentProfile?.agentName ?: "LIC Agent",
+                                                                agencyCode = agentProfile?.agencyCode ?: "",
+                                                                branch = agentProfile?.branchName ?: ""
+                                                            )
+                                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                                putExtra(Intent.EXTRA_TEXT, pdfText)
+                                                                type = "text/plain"
+                                                            }
+                                                            context.startActivity(Intent.createChooser(intent, "Export Receipt PDF"))
+                                                        }
+                                                    )
+
+                                                    // 📤 Share
+                                                    DropdownMenuItem(
+                                                        text = { Text("Share", color = TextWhite, fontSize = 13.sp) },
+                                                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(16.dp)) },
+                                                        onClick = {
+                                                            activeRowMenuId = null
+                                                            val shareText = generateReceiptShareText(
+                                                                payment = payment,
+                                                                agentName = agentProfile?.agentName ?: "LIC Agent",
+                                                                agencyCode = agentProfile?.agencyCode ?: "",
+                                                                branch = agentProfile?.branchName ?: ""
+                                                            )
+                                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                                putExtra(Intent.EXTRA_TEXT, shareText)
+                                                                type = "text/plain"
+                                                            }
+                                                            context.startActivity(Intent.createChooser(intent, "Share Payment Receipt"))
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        if (index < filteredCustomerPayments.size - 1) {
+                                            HorizontalDivider(color = BorderSlate.copy(alpha = 0.4f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 
-    // ==================== INTERACTIVE DIALOGS ====================
+    // ==================== INTERACTIVE DIALOGS & MODALS ====================
 
-    // 1. Collect Premium Modal
-    selectedPolicyForCollect?.let { policy ->
+    // 1. RECORD PAYMENT DIALOG
+    if (showRecordPaymentDialog) {
+        PaymentCollectionDialog(
+            policy = primaryPolicy,
+            customersList = allCustomers,
+            policiesList = allPolicies,
+            existingPayments = allPayments,
+            onDismiss = { showRecordPaymentDialog = false },
+            onSavePayment = { pol, paidAmt, mode, date, notes ->
+                viewModel?.collectPremium(
+                    policy = pol,
+                    paidAmount = paidAmt,
+                    paymentMode = mode,
+                    paymentDate = date,
+                    notes = notes,
+                    onSuccess = {
+                        showRecordPaymentDialog = false
+                        viewModel.refreshData()
+                        Toast.makeText(context, "Payment recorded successfully!", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+        )
+    }
+
+    // 2. PAYMENT DETAILS MODAL
+    selectedPaymentForDetails?.let { payment ->
+        val remainingBal = getRemainingBalanceForPayment(payment, primaryPolicy, customerPayments)
+        val isFullyPaid = remainingBal <= 0.0
+        val isPartial = !isFullyPaid && payment.paidAmount > 0.0
+        val paymentStatus = when {
+            isFullyPaid -> "Paid"
+            isPartial -> "Partial"
+            else -> "Pending"
+        }
+
         AlertDialog(
-            onDismissRequest = { selectedPolicyForCollect = null },
+            onDismissRequest = { selectedPaymentForDetails = null },
             containerColor = DarkCardSurface,
             titleContentColor = TextWhite,
             textContentColor = TextMuted,
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Payments, contentDescription = null, tint = EmeraldGreen)
+                    Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null, tint = RoyalBlueLight)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Collect Premium", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Plan: ${policy.planName}", color = TextWhite, fontWeight = FontWeight.SemiBold)
-                    Text("Policy #: ${policy.policyNumber}", color = TextMuted, fontSize = 13.sp)
-                    Text("Amount Due: ₹ ${"%.0f".format(policy.premiumAmount)}", color = EmeraldGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Due Date: ${policy.dueDate}", color = AmberDue, fontSize = 12.sp)
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        Toast.makeText(context, "Premium collected for ${policy.policyNumber}!", Toast.LENGTH_LONG).show()
-                        selectedPolicyForCollect = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Confirm Collection", color = Color.White, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick = { selectedPolicyForCollect = null },
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("Cancel", color = TextMuted)
-                }
-            }
-        )
-    }
-
-    // 2. Policy Detail Modal
-    selectedPolicyForDetail?.let { policy ->
-        AlertDialog(
-            onDismissRequest = { selectedPolicyForDetail = null },
-            containerColor = DarkCardSurface,
-            titleContentColor = TextWhite,
-            textContentColor = TextMuted,
-            title = { Text(policy.planName, fontWeight = FontWeight.Bold) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DetailRow("Policy Number", policy.policyNumber)
-                    DetailRow("Premium Amount", "₹ ${"%.0f".format(policy.premiumAmount)}")
-                    DetailRow("Premium Mode", policy.premiumMode)
-                    DetailRow("Next Due Date", policy.dueDate)
-                    DetailRow("Status", policy.status)
-                    DetailRow("Payment Tenure", "${policy.yearsPaid} of ${policy.totalYears} Years Paid")
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { selectedPolicyForDetail = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
-                ) {
-                    Text("Close")
-                }
-            }
-        )
-    }
-
-    // 3. Receipt View Modal
-    selectedPaymentForReceipt?.let { payment ->
-        AlertDialog(
-            onDismissRequest = { selectedPaymentForReceipt = null },
-            containerColor = DarkCardSurface,
-            titleContentColor = TextWhite,
-            textContentColor = TextMuted,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Receipt, contentDescription = null, tint = RoyalBlueLight)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Premium Receipt", fontWeight = FontWeight.Bold)
+                    Text("Payment Details", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             },
             text = {
@@ -944,64 +1201,174 @@ fun CustomerProfileScreen(
                         .fillMaxWidth()
                         .background(DarkCardSurfaceVariant, RoundedCornerShape(12.dp))
                         .padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    DetailRow("Receipt No", payment.receiptNo)
-                    DetailRow("Date Paid", payment.date)
-                    DetailRow("Amount", "₹ ${"%.0f".format(payment.amount)}")
-                    DetailRow("Payment Mode", payment.mode)
-                    DetailRow("Advisor", "LIC Premium Reminder Pro")
+                    DetailRow("Receipt No", payment.receiptNumber)
+                    DetailRow("Payment Date", payment.paymentDate)
+                    DetailRow("Amount Paid", "₹ ${"%.0f".format(payment.paidAmount)}")
+                    DetailRow("Outstanding Balance", "₹ ${"%.0f".format(remainingBal.coerceAtLeast(0.0))}")
+                    DetailRow("Payment Mode", payment.paymentMode)
+                    DetailRow("Status", paymentStatus)
+                    if (payment.notes.isNotBlank()) {
+                        DetailRow("Notes", payment.notes)
+                    }
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        Toast.makeText(context, "Receipt PDF shared!", Toast.LENGTH_SHORT).show()
-                        selectedPaymentForReceipt = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Share Receipt")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { selectedPaymentForReceipt = null }) {
-                    Text("Close", color = TextMuted)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Edit Payment Button
+                        Button(
+                            onClick = {
+                                editingPayment = payment
+                                selectedPaymentForDetails = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Edit", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Delete Payment Button
+                        Button(
+                            onClick = {
+                                deletingPayment = payment
+                                selectedPaymentForDetails = null
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CrimsonOverdue),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Delete", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Export PDF / Share Button
+                        OutlinedButton(
+                            onClick = {
+                                val shareText = generateReceiptShareText(
+                                    payment = payment,
+                                    agentName = agentProfile?.agentName ?: "LIC Agent",
+                                    agencyCode = agentProfile?.agencyCode ?: "",
+                                    branch = agentProfile?.branchName ?: ""
+                                )
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    putExtra(Intent.EXTRA_TEXT, shareText)
+                                    type = "text/plain"
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Export Receipt PDF"))
+                                selectedPaymentForDetails = null
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, RoyalBlueLight),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Share PDF", color = RoyalBlueLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Close Button
+                        OutlinedButton(
+                            onClick = { selectedPaymentForDetails = null },
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, BorderSlate),
+                            modifier = Modifier.weight(1f).height(40.dp)
+                        ) {
+                            Text("Close", color = TextMuted, fontSize = 12.sp)
+                        }
+                    }
                 }
             }
         )
     }
 
-    // 4. Document Upload Modal
-    if (showUploadDocDialog) {
+    // 3. EDIT PAYMENT DIALOG
+    editingPayment?.let { payment ->
+        EditPaymentDialog(
+            payment = payment,
+            existingPayments = allPayments,
+            onDismiss = { editingPayment = null },
+            onSave = { updated ->
+                viewModel?.updatePayment(updated) {
+                    editingPayment = null
+                    viewModel.refreshData()
+                    Toast.makeText(context, "Payment updated successfully!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    // 4. DELETE PAYMENT DIALOG
+    deletingPayment?.let { payment ->
+        DeletePaymentDialog(
+            payment = payment,
+            onDismiss = { deletingPayment = null },
+            onConfirmDelete = {
+                viewModel?.deletePayment(payment) {
+                    deletingPayment = null
+                    viewModel.refreshData()
+                    Toast.makeText(context, "Payment deleted successfully!", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    // 5. DELETE CUSTOMER CONFIRMATION DIALOG
+    if (showDeleteCustomerDialog) {
         AlertDialog(
-            onDismissRequest = { showUploadDocDialog = false },
+            onDismissRequest = { showDeleteCustomerDialog = false },
             containerColor = DarkCardSurface,
             titleContentColor = TextWhite,
-            title = { Text("Upload Document", fontWeight = FontWeight.Bold) },
-            text = { Text("Select document type (Aadhaar, PAN, Policy Bond, or Nominee Form) to upload to Vault.", color = TextMuted) },
+            textContentColor = TextMuted,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Warning, contentDescription = null, tint = CrimsonOverdue)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Delete Customer", fontWeight = FontWeight.Bold, color = CrimsonOverdue)
+                }
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete ${currentCustomer.name}? This will permanently remove the customer record.",
+                    color = TextMuted
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
-                        documentsList = documentsList + ProfileDocumentModel(
-                            id = System.currentTimeMillis(),
-                            title = "Medical Medical Clearance Certificate",
-                            docType = "Medical Form",
-                            status = "Verified",
-                            isUploaded = true
-                        )
-                        Toast.makeText(context, "Document uploaded to Vault!", Toast.LENGTH_SHORT).show()
-                        showUploadDocDialog = false
+                        viewModel?.deleteCustomer(currentCustomer)
+                        showDeleteCustomerDialog = false
+                        Toast.makeText(context, "Customer deleted", Toast.LENGTH_SHORT).show()
+                        onBack()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                    colors = ButtonDefaults.buttonColors(containerColor = CrimsonOverdue),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Upload File")
+                    Text("Confirm Delete", color = Color.White, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                OutlinedButton(onClick = { showUploadDocDialog = false }) {
+                OutlinedButton(
+                    onClick = { showDeleteCustomerDialog = false },
+                    shape = RoundedCornerShape(10.dp),
+                    border = BorderStroke(1.dp, BorderSlate)
+                ) {
                     Text("Cancel", color = TextMuted)
                 }
             }
@@ -1009,10 +1376,59 @@ fun CustomerProfileScreen(
     }
 }
 
-// ==================== HELPER SUB-COMPONENTS ====================
+// ==================== HELPER COMPOSABLES ====================
 
 @Composable
-private fun QuickActionButton(
+private fun InfoRow(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    valueColor: Color = TextWhite
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = RoyalBlueLight,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = TextMuted,
+                    fontSize = 13.sp
+                )
+            )
+        }
+
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium.copy(
+                fontWeight = FontWeight.Bold,
+                color = valueColor,
+                fontSize = 13.sp
+            ),
+            textAlign = TextAlign.End,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1.2f)
+        )
+    }
+}
+
+@Composable
+private fun QuickActionGridCard(
     icon: ImageVector,
     label: String,
     containerColor: Color,
@@ -1027,26 +1443,26 @@ private fun QuickActionButton(
         color = containerColor,
         border = BorderStroke(1.dp, borderColor),
         shadowElevation = 4.dp,
-        modifier = modifier.height(48.dp)
+        modifier = modifier.height(56.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 4.dp)
+            modifier = Modifier.padding(horizontal = 8.dp)
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
                 tint = contentColor,
-                modifier = Modifier.size(16.dp)
+                modifier = Modifier.size(18.dp)
             )
-            Spacer(modifier = Modifier.width(4.dp))
+            Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelSmall.copy(
                     color = contentColor,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp
+                    fontSize = 12.sp
                 ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
@@ -1056,127 +1472,74 @@ private fun QuickActionButton(
 }
 
 @Composable
-private fun SummaryCard(
-    icon: ImageVector,
-    iconTint: Color,
-    value: String,
-    label: String,
-    subtitle: String,
-    modifier: Modifier = Modifier
+private fun ProfilePaymentCard(
+    payment: PaymentEntity,
+    remainingBalance: Double,
+    onClick: () -> Unit
 ) {
-    Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
-        border = BorderStroke(1.dp, BorderSlate),
-        modifier = modifier.height(104.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .padding(14.dp)
-                .fillMaxSize(),
-            verticalArrangement = Arrangement.Center
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                )
-                Box(
-                    modifier = Modifier
-                        .size(28.dp)
-                        .clip(CircleShape)
-                        .background(iconTint.copy(alpha = 0.15f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(16.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = value,
-                style = MaterialTheme.typography.titleLarge.copy(
-                    color = TextWhite,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 19.sp
-                )
-            )
-
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.labelSmall.copy(
-                    color = TextMuted,
-                    fontSize = 10.sp
-                )
-            )
-        }
+    val isFullyPaid = remainingBalance <= 0.0
+    val isPartial = !isFullyPaid && payment.paidAmount > 0.0
+    val statusText = when {
+        isFullyPaid -> "Paid"
+        isPartial -> "Partial"
+        else -> "Pending"
     }
-}
 
-@Composable
-private fun ProfilePolicyCard(
-    policy: ProfilePolicyModel,
-    onCollect: () -> Unit,
-    onDetails: () -> Unit,
-    onReceipt: () -> Unit
-) {
-    val (statusColor, statusBg) = when (policy.status) {
-        "Active" -> EmeraldGreen to EmeraldGreenContainer
-        "Due" -> AmberDue to AmberDueContainer
-        else -> CrimsonOverdue to CrimsonOverdueContainer
+    val statusBgColor = when (statusText) {
+        "Paid" -> EmeraldGreenContainer
+        "Partial" -> AmberDueContainer
+        else -> CrimsonOverdueContainer
+    }
+
+    val statusTextColor = when (statusText) {
+        "Paid" -> EmeraldGreen
+        "Partial" -> AmberDue
+        else -> CrimsonOverdue
     }
 
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = DarkCardSurface),
         border = BorderStroke(1.dp, BorderSlate),
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(4.dp, shape = RoundedCornerShape(20.dp), spotColor = Color.Black.copy(alpha = 0.2f))
+            .shadow(4.dp, shape = RoundedCornerShape(16.dp), spotColor = Color.Black.copy(alpha = 0.2f))
+            .clickable { onClick() }
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // Header Row: Payment Date + Status Chip
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Event,
+                        contentDescription = null,
+                        tint = RoyalBlueLight,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = policy.planName,
+                        text = payment.paymentDate,
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Bold,
                             color = TextWhite,
-                            fontSize = 16.sp
-                        )
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "Policy #: ${policy.policyNumber}",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = TextMuted,
-                            fontSize = 12.sp
+                            fontSize = 15.sp
                         )
                     )
                 }
 
                 Surface(
-                    color = statusBg,
+                    color = statusBgColor,
                     shape = RoundedCornerShape(50.dp),
-                    border = BorderStroke(1.dp, statusColor.copy(alpha = 0.5f))
+                    border = BorderStroke(1.dp, statusTextColor.copy(alpha = 0.5f))
                 ) {
                     Text(
-                        text = policy.status,
+                        text = statusText,
                         style = MaterialTheme.typography.labelSmall.copy(
-                            color = statusColor,
+                            color = statusTextColor,
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp
                         ),
@@ -1185,260 +1548,68 @@ private fun ProfilePolicyCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Premium Details Box
             Surface(
                 color = DarkCardSurfaceVariant,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("Premium Amount", style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp))
-                        Text("₹ ${"%.0f".format(policy.premiumAmount)} (${policy.premiumMode})", style = MaterialTheme.typography.bodyMedium.copy(color = RoyalBlueLight, fontWeight = FontWeight.Bold))
+                        Text("Amount Paid", style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp))
+                        Text(
+                            text = "₹ ${"%.0f".format(payment.paidAmount)}",
+                            style = MaterialTheme.typography.bodyMedium.copy(color = EmeraldGreen, fontWeight = FontWeight.Bold)
+                        )
                     }
+
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("Next Due Date", style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp))
-                        Text(policy.dueDate, style = MaterialTheme.typography.bodyMedium.copy(color = AmberDue, fontWeight = FontWeight.Bold))
+                        Text("Outstanding Balance", style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp))
+                        Text(
+                            text = "₹ ${"%.0f".format(remainingBalance.coerceAtLeast(0.0))}",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = if (remainingBalance > 0) CrimsonOverdue else TextMuted,
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Progress Bar (Years Paid)
-            val progress = remember(policy.yearsPaid, policy.totalYears) {
-                policy.yearsPaid.toFloat() / policy.totalYears.toFloat()
-            }
-            Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Payment Progress", style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp))
-                    Text("${policy.yearsPaid} of ${policy.totalYears} Yrs (${(progress * 100).toInt()}%)", style = MaterialTheme.typography.labelSmall.copy(color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 11.sp))
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp)),
-                    color = RoyalBlueLight,
-                    trackColor = BorderSlate
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Action Buttons: Collect, Details, Receipt
+            // Footer Row: Payment Mode & Receipt Number
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onCollect,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = EmeraldGreen),
-                    modifier = Modifier.weight(1.1f).height(38.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(Icons.Default.Payments, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Collect", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                }
-
-                OutlinedButton(
-                    onClick = onDetails,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, RoyalBlueLight),
-                    modifier = Modifier.weight(1f).height(38.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Text("Details", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = RoyalBlueLight)
-                }
-
-                OutlinedButton(
-                    onClick = onReceipt,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, BorderSlate),
-                    modifier = Modifier.weight(1f).height(38.dp),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Icon(Icons.Default.Receipt, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Receipt", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = TextMuted)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TimelineItem(
-    payment: ProfilePaymentModel,
-    isLast: Boolean,
-    onViewReceipt: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.Top
-    ) {
-        // Node Dot & Line
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(top = 4.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(EmeraldGreen)
-                    .border(2.dp, EmeraldGreenContainer, CircleShape)
-            )
-            if (!isLast) {
-                Box(
-                    modifier = Modifier
-                        .width(2.dp)
-                        .height(56.dp)
-                        .background(BorderSlate)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        // Card Content
-        Surface(
-            color = DarkCardSurfaceVariant,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = if (isLast) 0.dp else 12.dp)
-                .clickable { onViewReceipt() }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "₹ ${"%.0f".format(payment.amount)}",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = EmeraldGreen,
-                            fontSize = 15.sp
-                        )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Payments,
+                        contentDescription = null,
+                        tint = TextMuted,
+                        modifier = Modifier.size(14.dp)
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${payment.date} • ${payment.mode}",
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            color = TextWhite,
-                            fontSize = 12.sp
-                        )
-                    )
-                    Text(
-                        text = "Receipt: ${payment.receiptNo}",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = TextMuted,
-                            fontSize = 11.sp
-                        )
-                    )
-                }
-
-                Icon(
-                    imageVector = Icons.Default.ReceiptLong,
-                    contentDescription = "View Receipt",
-                    tint = RoyalBlueLight,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DocumentRowItem(doc: ProfileDocumentModel) {
-    Surface(
-        color = DarkCardSurfaceVariant,
-        shape = RoundedCornerShape(12.dp),
-        border = BorderStroke(1.dp, BorderSlate.copy(alpha = 0.5f)),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    imageVector = when (doc.docType) {
-                        "Aadhaar" -> Icons.Default.Badge
-                        "PAN" -> Icons.Default.CreditCard
-                        "Policy Bond" -> Icons.Default.Description
-                        else -> Icons.Default.FolderShared
-                    },
-                    contentDescription = null,
-                    tint = RoyalBlueLight,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
-                    Text(
-                        text = doc.title,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontWeight = FontWeight.SemiBold,
-                            color = TextWhite,
-                            fontSize = 13.sp
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "Type: ${doc.docType}",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = TextMuted,
-                            fontSize = 11.sp
-                        )
-                    )
-                }
-            }
-
-            Surface(
-                color = EmeraldGreenContainer,
-                shape = RoundedCornerShape(20.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreen, modifier = Modifier.size(12.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = doc.status,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            color = EmeraldGreen,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 10.sp
-                        )
+                        text = "Mode: ${payment.paymentMode}",
+                        style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 11.sp)
                     )
                 }
+
+                Text(
+                    text = "Receipt: ${payment.receiptNumber}",
+                    style = MaterialTheme.typography.labelSmall.copy(color = RoyalBlueLight, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                )
             }
         }
     }

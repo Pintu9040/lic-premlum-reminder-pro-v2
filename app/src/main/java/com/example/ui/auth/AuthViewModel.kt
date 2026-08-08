@@ -26,7 +26,9 @@ sealed class AuthState {
         val name: String,
         val agencyCode: String,
         val branchName: String = "",
-        val mobile: String = ""
+        val mobile: String = "",
+        val isEmailVerified: Boolean = true,
+        val isAnonymous: Boolean = false
     ) : AuthState()
     data class Error(val message: String) : AuthState()
 }
@@ -311,6 +313,12 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         Log.w("AuthViewModel", "Could not set auth display name: ${e.localizedMessage}")
                     }
 
+                    try {
+                        user.sendEmailVerification().await()
+                    } catch (e: Exception) {
+                        Log.w("AuthViewModel", "Could not send verification email on register: ${e.localizedMessage}")
+                    }
+
                     db.agentDao().saveAgentProfile(profile)
                     syncManager.backupAgentProfile(uid, profile)
                     syncManager.initialBackupAll(uid, db)
@@ -321,7 +329,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         name = trimmedName,
                         agencyCode = profile.agencyCode,
                         branchName = profile.branchName,
-                        mobile = profile.mobile
+                        mobile = profile.mobile,
+                        isEmailVerified = user.isEmailVerified,
+                        isAnonymous = user.isAnonymous
                     )
                 } else {
                     val errorMsg = "Registration failed: Empty user account returned from Firebase."
@@ -332,6 +342,117 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 val errorMsg = e.localizedMessage ?: e.message ?: e.toString()
                 Log.e("AuthViewModel", "Firebase createUserWithEmailAndPassword exception: $errorMsg", e)
                 _authState.value = AuthState.Error(errorMsg)
+            }
+        }
+    }
+
+    fun loginWithGoogleToken(idToken: String) {
+        if (idToken.isBlank()) {
+            _authState.value = AuthState.Error("Invalid Google Sign-In token")
+            return
+        }
+
+        viewModelScope.launch {
+            _authState.value = AuthState.Loading
+            val authResult = getFirebaseAuthResult()
+            val firebaseAuth = authResult.getOrElse { throwable ->
+                _authState.value = AuthState.Error("Firebase initialization failed")
+                return@launch
+            }
+
+            try {
+                val credential = com.google.firebase.auth.GoogleAuthProvider.getCredential(idToken, null)
+                val result = firebaseAuth.signInWithCredential(credential).await()
+                val user = result.user
+                if (user != null) {
+                    val uid = user.uid
+                    val email = user.email ?: "google_user@lic.com"
+                    val name = user.displayName?.ifBlank { null } ?: email.substringBefore("@")
+                    
+                    val profile = AgentProfileEntity(
+                        id = 1,
+                        agentName = name,
+                        agencyCode = "LIC-AGENT-89421",
+                        branchName = "Branch 883",
+                        email = email,
+                        mobile = user.phoneNumber ?: ""
+                    )
+                    db.agentDao().saveAgentProfile(profile)
+                    syncManager.backupAgentProfile(uid, profile)
+
+                    _authState.value = AuthState.LoggedIn(
+                        uid = uid,
+                        email = email,
+                        name = name,
+                        agencyCode = profile.agencyCode,
+                        branchName = profile.branchName,
+                        mobile = profile.mobile,
+                        isEmailVerified = user.isEmailVerified,
+                        isAnonymous = user.isAnonymous
+                    )
+                    launch {
+                        syncManager.autoRestoreAndSync(uid, db)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Google Sign-In error: ${e.localizedMessage}", e)
+                _authState.value = AuthState.Error("Google Sign-In failed: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun loginAnonymously() {
+        viewModelScope.launch {
+            _authState.value = AuthState.Loading
+            val authResult = getFirebaseAuthResult()
+            val firebaseAuth = authResult.getOrElse {
+                _authState.value = AuthState.Error("Firebase initialization failed")
+                return@launch
+            }
+
+            try {
+                val result = firebaseAuth.signInAnonymously().await()
+                val user = result.user
+                if (user != null) {
+                    val uid = user.uid
+                    val profile = AgentProfileEntity(
+                        id = 1,
+                        agentName = "Guest Agent",
+                        agencyCode = "GUEST-89421",
+                        branchName = "Guest Branch",
+                        email = "guest@licreminderpro.com",
+                        mobile = ""
+                    )
+                    db.agentDao().saveAgentProfile(profile)
+
+                    _authState.value = AuthState.LoggedIn(
+                        uid = uid,
+                        email = profile.email,
+                        name = profile.agentName,
+                        agencyCode = profile.agencyCode,
+                        branchName = profile.branchName,
+                        mobile = profile.mobile,
+                        isEmailVerified = false,
+                        isAnonymous = true
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("AuthViewModel", "Anonymous login error: ${e.localizedMessage}", e)
+                _authState.value = AuthState.Error("Guest login failed: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun sendEmailVerification() {
+        viewModelScope.launch {
+            try {
+                val user = getFirebaseAuthResult().getOrNull()?.currentUser
+                if (user != null && !user.isEmailVerified) {
+                    user.sendEmailVerification().await()
+                    _forgotPasswordSuccess.value = "Verification email sent to ${user.email}."
+                }
+            } catch (e: Exception) {
+                _authState.value = AuthState.Error("Could not send verification email: ${e.localizedMessage}")
             }
         }
     }

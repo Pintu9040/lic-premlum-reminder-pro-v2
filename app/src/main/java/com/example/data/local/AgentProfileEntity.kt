@@ -14,6 +14,7 @@ data class AgentProfileEntity(
     val licenseNumber: String = "LIC-LIC-901234",
     val email: String = "agent@licreminderpro.com",
     val mobile: String = "+91 98765 43210",
+    val officeAddress: String = "Plot 102, Janpath, Bhubaneswar, Odisha",
     val photoUri: String = "",
     val themeMode: String = "System", // "Light", "Dark", "System"
     val isDarkMode: Boolean = false,

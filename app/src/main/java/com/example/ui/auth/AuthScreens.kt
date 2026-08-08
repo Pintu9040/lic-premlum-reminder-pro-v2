@@ -587,20 +587,20 @@ fun LoginScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Modern Outlined Biometric Login Button
+                        // Google Sign-In Button
                         OutlinedButton(
                             onClick = {
                                 keyboardController?.hide()
-                                Toast.makeText(context, "Biometric authentication successful!", Toast.LENGTH_SHORT).show()
-                                authViewModel.login(email, password)
+                                authViewModel.loginWithGoogleToken("sample_google_token_" + System.currentTimeMillis())
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(50.dp),
+                                .height(50.dp)
+                                .testTag("login_google_button"),
                             shape = RoundedCornerShape(16.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBluePrimary.copy(alpha = 0.4f)),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF4285F4).copy(alpha = 0.5f)),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                contentColor = RoyalBluePrimary
+                                contentColor = Color(0xFF4285F4)
                             )
                         ) {
                             Row(
@@ -608,18 +608,52 @@ fun LoginScreen(
                                 horizontalArrangement = Arrangement.Center
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Fingerprint,
-                                    contentDescription = "Biometric Login",
-                                    tint = RoyalBluePrimary,
-                                    modifier = Modifier.size(22.dp)
+                                    imageVector = Icons.Default.AccountCircle,
+                                    contentDescription = "Google Sign In",
+                                    tint = Color(0xFF4285F4),
+                                    modifier = Modifier.size(20.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Sign In with Biometrics",
+                                    text = "Sign In with Google",
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontWeight = FontWeight.SemiBold,
                                         fontSize = 13.5.sp,
-                                        color = RoyalBluePrimary
+                                        color = Color(0xFF4285F4)
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Guest Mode Button
+                        TextButton(
+                            onClick = {
+                                keyboardController?.hide()
+                                authViewModel.loginAnonymously()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("login_guest_button")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PersonOutline,
+                                    contentDescription = "Guest Login",
+                                    tint = NeutralTextSecondaryLight,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Continue as Guest Agent",
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        fontWeight = FontWeight.Medium,
+                                        color = NeutralTextSecondaryLight,
+                                        fontSize = 12.5.sp
                                     )
                                 )
                             }

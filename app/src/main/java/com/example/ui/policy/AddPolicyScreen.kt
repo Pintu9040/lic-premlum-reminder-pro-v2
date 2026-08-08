@@ -100,6 +100,7 @@ fun AddPolicyScreen(
 
     // Policy Details Form States
     var planName by remember { mutableStateOf(policy?.planName ?: "Jeevan Umang (945)") }
+    var isPlanDropdownExpanded by remember { mutableStateOf(false) }
     var policyNumber by remember { mutableStateOf(policy?.policyNumber ?: "POL-" + System.currentTimeMillis().toString().takeLast(7)) }
     var premiumAmountStr by remember { mutableStateOf(policy?.premiumAmount?.toInt()?.toString() ?: "24500") }
     var selectedPremiumMode by remember { mutableStateOf(policy?.premiumMode ?: "Yearly") } // Yearly, Half-Yearly, Quarterly, Monthly
@@ -615,97 +616,87 @@ fun AddPolicyScreen(
                         )
                     }
 
-                    // Plan Name Field
-                    AnimatedPolicyTextField(
-                        value = planName,
-                        onValueChange = { planName = it },
-                        label = "Plan Name",
-                        leadingIconVector = Icons.Default.Description,
-                        singleLine = true,
-                        maxLines = 1,
-                        testTagStr = "policy_plan_name_input"
-                    )
-
-                    // LIC Plan Chips (Equal width & height, horizontal scrollable, smooth selection animation)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "Popular LIC Plans",
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                color = textSecondary,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp
-                            )
-                        )
-
-                        val popularLicPlans = listOf(
-                            "Jeevan Umang (945)",
+                    val popularLicPlans = remember {
+                        listOf(
                             "Jeevan Labh (936)",
-                            "Endowment (914)",
-                            "Money Back (920)",
+                            "Jeevan Umang (945)",
+                            "Endowment Plan (914)",
+                            "Money Back Plan (920)",
                             "Tech Term (854)",
-                            "Ananda (915)",
-                            "Bima Jyoti (860)"
+                            "SIIP (852)",
+                            "Jeevan Anand (915)",
+                            "Bima Jyoti (860)",
+                            "Cancer Cover (905)",
+                            "Jeevan Akshay VII (857)",
+                            "Jeevan Shanti (858)",
+                            "Nivesh Plus (849)",
+                            "Jeevan Lakshya (933)",
+                            "Single Premium Endowment (917)",
+                            "Jeevan Azad (868)",
+                            "Jeevan Amar (855)",
+                            "Dhan Sanchay (865)",
+                            "Dhan Rekha (863)",
+                            "Jeevan Utsav (871)",
+                            "Amritbaal (874)",
+                            "Jeevan Samarth (873)",
+                            "Index Plus (873)",
+                            "Bima Shree (948)",
+                            "Jeevan Shiromani (947)"
+                        )
+                    }
+
+                    val filteredMasterPlans = remember(planName, popularLicPlans) {
+                        if (planName.isBlank()) popularLicPlans
+                        else popularLicPlans.filter { it.contains(planName, ignoreCase = true) }
+                    }
+
+                    // Searchable Material3 ExposedDropdownMenu for LIC Plan
+                    ExposedDropdownMenuBox(
+                        expanded = isPlanDropdownExpanded && filteredMasterPlans.isNotEmpty(),
+                        onExpandedChange = { isPlanDropdownExpanded = it },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AnimatedPolicyTextField(
+                            value = planName,
+                            onValueChange = {
+                                planName = it
+                                isPlanDropdownExpanded = true
+                            },
+                            label = "LIC Plan Name & Code",
+                            leadingIconVector = Icons.Default.Description,
+                            trailingIcon = {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = isPlanDropdownExpanded)
+                            },
+                            singleLine = true,
+                            maxLines = 1,
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryEditable, enabled = true),
+                            testTagStr = "policy_plan_name_input"
                         )
 
-                        Row(
+                        ExposedDropdownMenu(
+                            expanded = isPlanDropdownExpanded && filteredMasterPlans.isNotEmpty(),
+                            onDismissRequest = { isPlanDropdownExpanded = false },
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                .background(darkCardSurface)
+                                .heightIn(max = 240.dp)
                         ) {
-                            popularLicPlans.forEach { plan ->
-                                val isSelected = planName == plan
-                                val animatedBgColor by animateColorAsState(
-                                    targetValue = if (isSelected) RoyalBluePrimary else darkBg,
-                                    animationSpec = tween(durationMillis = 200),
-                                    label = "planBg"
-                                )
-                                val animatedBorderColor by animateColorAsState(
-                                    targetValue = if (isSelected) RoyalBlueLight else darkBorder,
-                                    animationSpec = tween(durationMillis = 200),
-                                    label = "planBorder"
-                                )
-
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = animatedBgColor,
-                                    border = BorderStroke(1.dp, animatedBorderColor),
-                                    modifier = Modifier
-                                        .width(160.dp)
-                                        .height(44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .clickable { planName = plan }
-                                        .testTag("lic_plan_chip_${plan.lowercase().replace(" ", "_")}")
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(horizontal = 10.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.Center
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                        }
+                            filteredMasterPlans.forEach { plan ->
+                                DropdownMenuItem(
+                                    text = {
                                         Text(
                                             text = plan,
                                             style = MaterialTheme.typography.bodyMedium.copy(
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                                color = if (isSelected) Color.White else textSecondary,
-                                                fontSize = 12.sp
-                                            ),
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            overflow = TextOverflow.Ellipsis
+                                                color = textPrimary,
+                                                fontWeight = if (planName == plan) FontWeight.Bold else FontWeight.Normal
+                                            )
                                         )
-                                    }
-                                }
+                                    },
+                                    onClick = {
+                                        planName = plan
+                                        isPlanDropdownExpanded = false
+                                    },
+                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                )
                             }
                         }
                     }
@@ -816,7 +807,7 @@ fun AddPolicyScreen(
                         }
                     }
 
-                    // Premium Payment Mode (Horizontally Scrollable, Same width 115.dp & height 48.dp, no clipped text)
+                    // Premium Payment Mode (Equal width weight(1f) & height 48.dp, no clipped text)
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = "Premium Payment Mode",
@@ -828,10 +819,8 @@ fun AddPolicyScreen(
                         )
 
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             premiumModes.forEach { mode ->
                                 val isSelected = selectedPremiumMode == mode.name
@@ -852,7 +841,7 @@ fun AddPolicyScreen(
                                     color = animatedBgColor,
                                     border = BorderStroke(1.dp, animatedBorderColor),
                                     modifier = Modifier
-                                        .width(115.dp)
+                                        .weight(1f)
                                         .height(48.dp)
                                         .clip(RoundedCornerShape(12.dp))
                                         .clickable { selectedPremiumMode = mode.name }
@@ -861,27 +850,30 @@ fun AddPolicyScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxSize()
-                                            .padding(horizontal = 8.dp),
+                                            .padding(horizontal = 2.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.Center
                                     ) {
-                                        Icon(
-                                            imageVector = if (isSelected) Icons.Default.Check else mode.icon,
-                                            contentDescription = null,
-                                            tint = if (isSelected) Color.White else textSecondary,
-                                            modifier = Modifier.size(15.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                        }
                                         Text(
                                             text = mode.name,
                                             style = MaterialTheme.typography.bodyMedium.copy(
                                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                                 color = if (isSelected) Color.White else textSecondary,
-                                                fontSize = 12.5.sp
+                                                fontSize = 11.5.sp,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
                                             ),
                                             maxLines = 1,
                                             softWrap = false,
-                                            overflow = TextOverflow.Visible
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                 }
@@ -1182,6 +1174,7 @@ private fun AnimatedPolicyTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     singleLine: Boolean = true,
     maxLines: Int = 1,
+    modifier: Modifier = Modifier,
     testTagStr: String
 ) {
     var isFocused by remember { mutableStateOf(false) }
@@ -1229,7 +1222,7 @@ private fun AnimatedPolicyTextField(
             unfocusedContainerColor = NeutralBgDark
         ),
         shape = RoundedCornerShape(14.dp),
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
             .onFocusChanged { isFocused = it.isFocused }

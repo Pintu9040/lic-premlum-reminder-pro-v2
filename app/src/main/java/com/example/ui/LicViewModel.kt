@@ -6,15 +6,31 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.*
 import com.example.data.repository.DashboardStats
 import com.example.data.repository.LicRepository
+import com.example.util.SearchFilterEngine
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
 enum class PolicyFilterStatus { ALL, ACTIVE, DUE, LAPSED, MATURED }
 enum class PolicyModeFilter { ALL, MONTHLY, QUARTERLY, HALF_YEARLY, YEARLY }
-enum class PolicySortOption { NEXT_DUE, PREMIUM_AMOUNT, CUSTOMER_NAME, RECENTLY_ADDED }
+enum class PolicySortOption { NEXT_DUE, PREMIUM_AMOUNT, CUSTOMER_NAME, RECENTLY_ADDED, CUSTOMER_NAME_AZ, CUSTOMER_NAME_ZA, PREMIUM_HIGH_LOW, PREMIUM_LOW_HIGH, DUE_DATE }
 enum class PolicyFilterDue { ALL, DUE_TODAY, DUE_THIS_MONTH, OVERDUE, UPCOMING }
-enum class CustomerFilterStatus { ALL, ACTIVE, DUE, LAPSED }
+enum class CustomerFilterStatus { ALL, ACTIVE, DUE, LAPSED, INACTIVE, DUE_TODAY, DUE_TOMORROW, UPCOMING, OVERDUE }
+
+private data class PolicyFilters(
+    val status: PolicyFilterStatus,
+    val mode: PolicyModeFilter,
+    val due: PolicyFilterDue,
+    val sort: PolicySortOption
+)
+
+private data class PaymentFilters(
+    val dateFilter: PaymentDateFilter,
+    val modeFilter: PaymentModeFilter,
+    val startDate: String?,
+    val endDate: String?
+)
 
 enum class FilterCategory { DUE_DATE, STATUS, MODE }
 
@@ -33,8 +49,8 @@ enum class SearchFilterOption(val label: String, val category: FilterCategory) {
     YEARLY("Yearly", FilterCategory.MODE)
 }
 
-enum class PaymentDateFilter { ALL, TODAY, THIS_WEEK, THIS_MONTH }
-enum class PaymentModeFilter { ALL, CASH, UPI, BANK_TRANSFER, CHEQUE }
+enum class PaymentDateFilter { ALL, TODAY, THIS_WEEK, THIS_MONTH, CUSTOM_DATE }
+enum class PaymentModeFilter { ALL, CASH, UPI, BANK_TRANSFER, CHEQUE, ONLINE }
 
 data class PaymentDashboardStats(
     val totalPremium: Double = 0.0,
@@ -46,11 +62,59 @@ data class PaymentDashboardStats(
     val paymentProgressPercent: Float = 0f
 )
 
+@OptIn(FlowPreview::class)
 class LicViewModel(application: Application) : AndroidViewModel(application) {
     private val syncManager = com.example.data.remote.FirebaseSyncManager(application)
     private val repository = LicRepository(AppDatabase.getDatabase(application), syncManager)
 
     val syncStatus: StateFlow<com.example.data.remote.SyncStatus> = syncManager.syncStatus
+
+    // Pull To Refresh & Sync Management
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private val _lastRefreshTime = MutableStateFlow(
+        try {
+            java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a, dd MMM yyyy"))
+        } catch (e: Exception) {
+            "Just now"
+        }
+    )
+    val lastRefreshTime: StateFlow<String> = _lastRefreshTime.asStateFlow()
+
+    fun refreshData(onComplete: ((Boolean, String) -> Unit)? = null) {
+        if (_isRefreshing.value) return // Disable duplicate refresh requests
+
+        viewModelScope.launch {
+            _isRefreshing.value = true
+            val isOnline = syncManager.isOnline()
+            try {
+                if (isOnline) {
+                    val uid = syncManager.getOrEnsureUid()
+                    if (uid.isNotBlank()) {
+                        syncManager.autoRestoreAndSync(uid, AppDatabase.getDatabase(getApplication()))
+                    }
+                    val nowStr = try {
+                        java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a, dd MMM yyyy"))
+                    } catch (e: Exception) { "Just now" }
+                    _lastRefreshTime.value = nowStr
+                    _isRefreshing.value = false
+                    onComplete?.invoke(true, "Data synced & refreshed successfully ($nowStr)")
+                } else {
+                    kotlinx.coroutines.delay(600) // Smooth animation feedback for local database reload
+                    val nowStr = try {
+                        java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a, dd MMM yyyy"))
+                    } catch (e: Exception) { "Just now" }
+                    _lastRefreshTime.value = nowStr
+                    _isRefreshing.value = false
+                    onComplete?.invoke(true, "Offline data refreshed ($nowStr)")
+                }
+            } catch (e: Exception) {
+                _isRefreshing.value = false
+                onComplete?.invoke(false, "Refresh error: ${e.localizedMessage ?: "Sync failed"}")
+            }
+        }
+    }
 
     fun triggerSync() {
         viewModelScope.launch {
@@ -61,6 +125,11 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
     // Search & Filter State
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    // 300ms Debounced search flow for smooth typing performance without UI lag
+    val debouncedSearchQuery: Flow<String> = _searchQuery
+        .debounce(300L)
+        .distinctUntilChanged()
 
     private val _selectedSearchFilters = MutableStateFlow<Set<SearchFilterOption>>(emptySet())
     val selectedSearchFilters: StateFlow<Set<SearchFilterOption>> = _selectedSearchFilters.asStateFlow()
@@ -90,6 +159,29 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
     private val _paymentSearchQuery = MutableStateFlow("")
     val paymentSearchQuery: StateFlow<String> = _paymentSearchQuery.asStateFlow()
 
+    val debouncedPaymentSearchQuery: Flow<String> = _paymentSearchQuery
+        .debounce(300L)
+        .distinctUntilChanged()
+
+    private val _paymentStartDate = MutableStateFlow<String?>(null)
+    val paymentStartDate: StateFlow<String?> = _paymentStartDate.asStateFlow()
+
+    private val _paymentEndDate = MutableStateFlow<String?>(null)
+    val paymentEndDate: StateFlow<String?> = _paymentEndDate.asStateFlow()
+
+    // Intermediate filter states for combine optimization
+    private val _customerFilterState = combine(_customerFilter, _selectedSearchFilters) { filter, searchFilters ->
+        filter to searchFilters
+    }
+
+    private val _policyFiltersState = combine(_statusFilter, _modeFilter, _dueFilter, _sortOption) { status, mode, due, sort ->
+        PolicyFilters(status, mode, due, sort)
+    }
+
+    private val _paymentFiltersState = combine(_paymentDateFilter, _paymentModeFilter, _paymentStartDate, _paymentEndDate) { dateFilter, modeFilter, startDate, endDate ->
+        PaymentFilters(dateFilter, modeFilter, startDate, endDate)
+    }
+
     // Base flows
     val dashboardStats: StateFlow<DashboardStats> = repository.dashboardStats.stateIn(
         scope = viewModelScope,
@@ -100,10 +192,10 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
     val customers: StateFlow<List<CustomerEntity>> = combine(
         repository.allCustomers,
         repository.allPolicies,
+        repository.allPayments,
         _searchQuery,
-        _customerFilter,
-        _selectedSearchFilters
-    ) { customerList, policyList, query, filter, searchFilters ->
+        _customerFilterState
+    ) { customerList, policyList, paymentList, query, (filter, searchFilters) ->
         val today = LocalDate.now()
         val todayStr = today.toString()
         val tomorrowStr = today.plusDays(1).toString()
@@ -115,40 +207,44 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
         customerList.filter { customer ->
             val custPolicies = policyList.filter { it.customerId == customer.id }
+            val custPayments = paymentList.filter { it.customerId == customer.id }
 
-            // Search query matching: Name, Mobile, Email, Aadhaar, PAN, Occupation, or linked Policy Number/Plan
-            val matchesQuery = query.isBlank() ||
-                    customer.name.contains(query, ignoreCase = true) ||
-                    customer.mobile.contains(query) ||
-                    customer.email.contains(query, ignoreCase = true) ||
-                    customer.aadhaar.contains(query) ||
-                    customer.pan.contains(query, ignoreCase = true) ||
-                    customer.occupation.contains(query, ignoreCase = true) ||
-                    custPolicies.any {
-                        it.policyNumber.contains(query, ignoreCase = true) ||
-                                it.planName.contains(query, ignoreCase = true)
-                    }
+            // Global Multi-Keyword Search across Name, Mobile, WhatsApp, Policy #, Plan Name, Nominee Name, Receipt #
+            val matchesQuery = SearchFilterEngine.matchesQuery(
+                query = query,
+                fields = listOf(
+                    customer.name,
+                    customer.mobile,
+                    customer.whatsapp,
+                    customer.email,
+                    customer.aadhaar,
+                    customer.pan,
+                    customer.occupation
+                ) + custPolicies.flatMap { listOf(it.policyNumber, it.planName, it.nominee) }
+                  + custPayments.map { it.receiptNumber }
+            )
 
             // Customer Status determination
             val isLapsed = custPolicies.any { it.status.equals("Lapsed", ignoreCase = true) }
-            val isDue = !isLapsed && custPolicies.any { policy ->
-                try {
-                    val d = LocalDate.parse(policy.dueDate)
-                    d.isBefore(today) || d == today || d.isBefore(today.plusDays(30))
-                } catch (e: Exception) { false }
+            val isDueToday = custPolicies.any { it.dueDate == todayStr }
+            val isDueTomorrow = custPolicies.any { it.dueDate == tomorrowStr }
+            val isOverdue = custPolicies.any { p ->
+                val d = SearchFilterEngine.parseLocalDateSafe(p.dueDate)
+                d != null && d.isBefore(today) && !p.status.equals("Paid-up", ignoreCase = true) && !p.status.equals("Matured", ignoreCase = true)
             }
-
-            val computedStatus = when {
-                isLapsed -> CustomerFilterStatus.LAPSED
-                isDue -> CustomerFilterStatus.DUE
-                else -> CustomerFilterStatus.ACTIVE
+            val isUpcoming = custPolicies.any { p ->
+                val d = SearchFilterEngine.parseLocalDateSafe(p.dueDate)
+                d != null && d.isAfter(today) && d.isBefore(today.plusDays(30))
             }
 
             val matchesFilter = when (filter) {
                 CustomerFilterStatus.ALL -> true
-                CustomerFilterStatus.ACTIVE -> computedStatus == CustomerFilterStatus.ACTIVE
-                CustomerFilterStatus.DUE -> computedStatus == CustomerFilterStatus.DUE
-                CustomerFilterStatus.LAPSED -> computedStatus == CustomerFilterStatus.LAPSED
+                CustomerFilterStatus.ACTIVE -> custPolicies.isNotEmpty() && !isLapsed && !isOverdue
+                CustomerFilterStatus.INACTIVE, CustomerFilterStatus.LAPSED -> isLapsed || custPolicies.isEmpty()
+                CustomerFilterStatus.DUE, CustomerFilterStatus.DUE_TODAY -> isDueToday
+                CustomerFilterStatus.DUE_TOMORROW -> isDueTomorrow
+                CustomerFilterStatus.UPCOMING -> isUpcoming
+                CustomerFilterStatus.OVERDUE -> isOverdue
             }
 
             // Multi-selection Search Filters
@@ -158,29 +254,15 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                         SearchFilterOption.TODAY_DUE -> custPolicies.any { it.dueDate == todayStr }
                         SearchFilterOption.TOMORROW_DUE -> custPolicies.any { it.dueDate == tomorrowStr }
                         SearchFilterOption.THIS_WEEK -> custPolicies.any { p ->
-                            try {
-                                val d = LocalDate.parse(p.dueDate)
-                                !d.isBefore(today) && !d.isAfter(weekEnd)
-                            } catch (e: Exception) { false }
+                            val d = SearchFilterEngine.parseLocalDateSafe(p.dueDate)
+                            d != null && !d.isBefore(today) && !d.isAfter(weekEnd)
                         }
                         SearchFilterOption.THIS_MONTH -> custPolicies.any { p ->
-                            try {
-                                val d = LocalDate.parse(p.dueDate)
-                                d.monthValue == today.monthValue && d.year == today.year
-                            } catch (e: Exception) { false }
+                            val d = SearchFilterEngine.parseLocalDateSafe(p.dueDate)
+                            d != null && d.monthValue == today.monthValue && d.year == today.year
                         }
-                        SearchFilterOption.UPCOMING -> custPolicies.any { p ->
-                            try {
-                                val d = LocalDate.parse(p.dueDate)
-                                d.isAfter(today)
-                            } catch (e: Exception) { false }
-                        }
-                        SearchFilterOption.OVERDUE -> custPolicies.any { p ->
-                            try {
-                                val d = LocalDate.parse(p.dueDate)
-                                d.isBefore(today) && !p.status.equals("Paid", ignoreCase = true)
-                            } catch (e: Exception) { false } || p.status.equals("Lapsed", ignoreCase = true)
-                        }
+                        SearchFilterOption.UPCOMING -> isUpcoming
+                        SearchFilterOption.OVERDUE -> isOverdue
                         else -> false
                     }
                 }
@@ -219,41 +301,37 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
     val policies: StateFlow<List<PolicyEntity>> = combine(
         repository.allPolicies,
         repository.allCustomers,
+        repository.allPayments,
         _searchQuery,
-        _statusFilter,
-        _modeFilter,
-        _dueFilter,
-        _sortOption
-    ) { flows: Array<Any> ->
-        @Suppress("UNCHECKED_CAST")
-        val list = flows[0] as List<PolicyEntity>
-        @Suppress("UNCHECKED_CAST")
-        val customersList = flows[1] as List<CustomerEntity>
-        val query = flows[2] as String
-        val status = flows[3] as PolicyFilterStatus
-        val mode = flows[4] as PolicyModeFilter
-        val due = flows[5] as PolicyFilterDue
-        val sort = flows[6] as PolicySortOption
-
+        _policyFiltersState
+    ) { list, customersList, paymentsList, query, (status, mode, due, sort) ->
         val todayStr = LocalDate.now().toString()
         val currentMonth = LocalDate.now().monthValue
         val currentYear = LocalDate.now().year
 
         val filtered = list.filter { policy ->
             val linkedCustomer = customersList.find { it.id == policy.customerId }
+            val linkedReceipts = paymentsList.filter { it.policyId == policy.id }.map { it.receiptNumber }
 
-            // Search matching (Customer Name, Policy #, Plan Name, Phone Number)
-            val matchesQuery = query.isBlank() ||
-                    policy.policyNumber.contains(query, ignoreCase = true) ||
-                    policy.planName.contains(query, ignoreCase = true) ||
-                    policy.customerName.contains(query, ignoreCase = true) ||
-                    (linkedCustomer != null && (linkedCustomer.mobile.contains(query) || linkedCustomer.whatsapp.contains(query)))
+            // Global Multi-Keyword Search: Customer Name, Mobile, WhatsApp, Policy #, Plan Name, Nominee, Receipt #
+            val matchesQuery = SearchFilterEngine.matchesQuery(
+                query = query,
+                fields = listOf(
+                    policy.policyNumber,
+                    policy.planName,
+                    policy.customerName,
+                    policy.nominee,
+                    linkedCustomer?.mobile,
+                    linkedCustomer?.whatsapp,
+                    linkedCustomer?.email
+                ) + linkedReceipts
+            )
 
-            // Status filter matching
+            // Status filter matching: Active, Paid, Pending, Lapsed, Matured, Cancelled
             val matchesStatus = when (status) {
                 PolicyFilterStatus.ALL -> true
                 PolicyFilterStatus.ACTIVE -> policy.status.equals("Active", ignoreCase = true)
-                PolicyFilterStatus.DUE -> policy.status.equals("Due", ignoreCase = true) || policy.status.equals("Grace", ignoreCase = true)
+                PolicyFilterStatus.DUE -> policy.status.equals("Due", ignoreCase = true) || policy.status.equals("Grace", ignoreCase = true) || policy.status.equals("Pending", ignoreCase = true)
                 PolicyFilterStatus.LAPSED -> policy.status.equals("Lapsed", ignoreCase = true)
                 PolicyFilterStatus.MATURED -> policy.status.equals("Matured", ignoreCase = true)
             }
@@ -268,7 +346,7 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // Due filter matching
-            val policyDueDate = try { LocalDate.parse(policy.dueDate) } catch (e: Exception) { null }
+            val policyDueDate = SearchFilterEngine.parseLocalDateSafe(policy.dueDate)
             val matchesDue = when (due) {
                 PolicyFilterDue.ALL -> true
                 PolicyFilterDue.DUE_TODAY -> policyDueDate?.toString() == todayStr
@@ -281,9 +359,11 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         when (sort) {
-            PolicySortOption.NEXT_DUE -> filtered.sortedBy { it.dueDate }
-            PolicySortOption.PREMIUM_AMOUNT -> filtered.sortedByDescending { it.premiumAmount }
-            PolicySortOption.CUSTOMER_NAME -> filtered.sortedBy { it.customerName.lowercase() }
+            PolicySortOption.NEXT_DUE, PolicySortOption.DUE_DATE -> filtered.sortedBy { it.dueDate }
+            PolicySortOption.PREMIUM_AMOUNT, PolicySortOption.PREMIUM_HIGH_LOW -> filtered.sortedByDescending { it.premiumAmount }
+            PolicySortOption.PREMIUM_LOW_HIGH -> filtered.sortedBy { it.premiumAmount }
+            PolicySortOption.CUSTOMER_NAME, PolicySortOption.CUSTOMER_NAME_AZ -> filtered.sortedBy { it.customerName.lowercase() }
+            PolicySortOption.CUSTOMER_NAME_ZA -> filtered.sortedByDescending { it.customerName.lowercase() }
             PolicySortOption.RECENTLY_ADDED -> filtered.sortedByDescending { it.id }
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -296,29 +376,49 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
 
     val filteredPayments: StateFlow<List<PaymentEntity>> = combine(
         repository.allPayments,
+        repository.allCustomers,
         _paymentSearchQuery,
-        _paymentDateFilter,
-        _paymentModeFilter
-    ) { paymentList, query, dateFilter, modeFilter ->
+        _paymentFiltersState
+    ) { paymentList, customersList, query, (dateFilter, modeFilter, startDate, endDate) ->
         val today = LocalDate.now()
         val currentMonth = today.monthValue
         val currentYear = today.year
         val startOfWeek = today.minusDays(today.dayOfWeek.value.toLong() - 1)
 
-        paymentList.filter { payment ->
-            val matchesQuery = query.isBlank() ||
-                    payment.customerName.contains(query, ignoreCase = true) ||
-                    payment.policyNumber.contains(query, ignoreCase = true) ||
-                    payment.receiptNumber.contains(query, ignoreCase = true) ||
-                    payment.notes.contains(query, ignoreCase = true)
+        val startLocalDate = SearchFilterEngine.parseLocalDateSafe(startDate)
+        val endLocalDate = SearchFilterEngine.parseLocalDateSafe(endDate)
 
-            val pDate = try { LocalDate.parse(payment.paymentDate) } catch (e: Exception) { null }
+        paymentList.filter { payment ->
+            val linkedCustomer = customersList.find { it.id == payment.customerId }
+
+            // Search matching: Customer Name, Mobile, WhatsApp, Policy #, Receipt #, Notes
+            val matchesQuery = SearchFilterEngine.matchesQuery(
+                query = query,
+                fields = listOf(
+                    payment.customerName,
+                    payment.policyNumber,
+                    payment.receiptNumber,
+                    payment.notes,
+                    linkedCustomer?.mobile,
+                    linkedCustomer?.whatsapp
+                )
+            )
+
+            val pDate = SearchFilterEngine.parseLocalDateSafe(payment.paymentDate)
 
             val matchesDate = when (dateFilter) {
                 PaymentDateFilter.ALL -> true
                 PaymentDateFilter.TODAY -> pDate?.isEqual(today) == true
                 PaymentDateFilter.THIS_WEEK -> pDate != null && !pDate.isBefore(startOfWeek) && !pDate.isAfter(today)
                 PaymentDateFilter.THIS_MONTH -> pDate != null && pDate.monthValue == currentMonth && pDate.year == currentYear
+                PaymentDateFilter.CUSTOM_DATE -> {
+                    if (pDate == null) false
+                    else {
+                        val matchesStart = startLocalDate == null || !pDate.isBefore(startLocalDate)
+                        val matchesEnd = endLocalDate == null || !pDate.isAfter(endLocalDate)
+                        matchesStart && matchesEnd
+                    }
+                }
             }
 
             val matchesMode = when (modeFilter) {
@@ -327,6 +427,7 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                 PaymentModeFilter.UPI -> payment.paymentMode.equals("UPI", ignoreCase = true)
                 PaymentModeFilter.BANK_TRANSFER -> payment.paymentMode.contains("Bank", ignoreCase = true) || payment.paymentMode.contains("Net", ignoreCase = true)
                 PaymentModeFilter.CHEQUE -> payment.paymentMode.equals("Cheque", ignoreCase = true)
+                PaymentModeFilter.ONLINE -> payment.paymentMode.contains("Online", ignoreCase = true) || payment.paymentMode.contains("UPI", ignoreCase = true)
             }
 
             matchesQuery && matchesDate && matchesMode
@@ -433,8 +534,30 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         _paymentDateFilter.value = filter
     }
 
+    fun setPaymentCustomDateRange(startDate: String?, endDate: String?) {
+        _paymentStartDate.value = startDate
+        _paymentEndDate.value = endDate
+        if (startDate != null || endDate != null) {
+            _paymentDateFilter.value = PaymentDateFilter.CUSTOM_DATE
+        }
+    }
+
     fun setPaymentModeFilter(filter: PaymentModeFilter) {
         _paymentModeFilter.value = filter
+    }
+
+    fun clearAllFilters() {
+        _searchQuery.value = ""
+        _paymentSearchQuery.value = ""
+        _selectedSearchFilters.value = emptySet()
+        _statusFilter.value = PolicyFilterStatus.ALL
+        _modeFilter.value = PolicyModeFilter.ALL
+        _dueFilter.value = PolicyFilterDue.ALL
+        _customerFilter.value = CustomerFilterStatus.ALL
+        _paymentDateFilter.value = PaymentDateFilter.ALL
+        _paymentModeFilter.value = PaymentModeFilter.ALL
+        _paymentStartDate.value = null
+        _paymentEndDate.value = null
     }
 
     // Customer Actions

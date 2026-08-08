@@ -1,12 +1,13 @@
 package com.example.ui.settings
 
+import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -18,14 +19,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import com.example.data.local.LicBranch
-import com.example.data.local.LicBranchMaster
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,20 +38,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.local.AppDatabase
+import com.example.data.local.AppSettingsData
+import com.example.data.local.AppSettingsManager
+import com.example.data.local.LicBranch
+import com.example.data.local.LicBranchMaster
 import com.example.ui.LicViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 // Color Palette Definition for Royal Blue + Dark Theme
@@ -67,7 +65,6 @@ private val RoyalBlueLight = Color(0xFF2563EB)
 private val RoyalBlueGlow = Color(0xFF3B82F6)
 private val AccentGreen = Color(0xFF10B981)
 private val AccentAmber = Color(0xFFF59E0B)
-private val AccentOrange = Color(0xFFF97316)
 private val AccentRed = Color(0xFFEF4444)
 private val TextWhite = Color(0xFFF8FAFC)
 private val TextMuted = Color(0xFF94A3B8)
@@ -79,6 +76,7 @@ fun SettingsScreen(
     onBackClick: () -> Unit = {},
     onLogout: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -91,6 +89,7 @@ fun SettingsScreen(
     var branchName by remember { mutableStateOf("Bhubaneswar Branch") }
     var mobileNumber by remember { mutableStateOf("+91 98765 43210") }
     var emailAddress by remember { mutableStateOf("pintu.lic.agent@gmail.com") }
+    var officeAddress by remember { mutableStateOf("Plot 102, Janpath, Bhubaneswar, Odisha") }
     var photoUri by remember { mutableStateOf("") }
 
     LaunchedEffect(agentProfileState) {
@@ -101,6 +100,7 @@ fun SettingsScreen(
             branchName = it.branchName
             mobileNumber = it.mobile
             emailAddress = it.email
+            officeAddress = it.officeAddress
             photoUri = it.photoUri
         }
     }
@@ -109,19 +109,38 @@ fun SettingsScreen(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val selectedUriStr = it.toString()
-            photoUri = selectedUriStr
-            val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
-                agentName = agentName,
-                agencyCode = agentCode,
-                branchName = branchName,
-                mobile = mobileNumber,
-                email = emailAddress,
-                photoUri = selectedUriStr
-            )
-            viewModel?.saveAgentProfile(updated)
             coroutineScope.launch {
-                snackbarHostState.showSnackbar("Profile photo updated successfully!")
+                val savedLocalPath = AppSettingsManager.compressAndSaveProfilePhoto(context, it)
+                photoUri = savedLocalPath
+                val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
+                    agentName = agentName,
+                    agencyCode = agentCode,
+                    branchCode = branchCode,
+                    branchName = branchName,
+                    mobile = mobileNumber,
+                    email = emailAddress,
+                    officeAddress = officeAddress,
+                    photoUri = savedLocalPath
+                )
+                viewModel?.saveAgentProfile(updated)
+                snackbarHostState.showSnackbar("Profile photo compressed & updated across app!")
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                val db = AppDatabase.getDatabase(context)
+                val res = com.example.data.backup.BackupManager.restoreFromUri(context, db, it)
+                res.onSuccess {
+                    viewModel?.triggerSync()
+                    snackbarHostState.showSnackbar("Backup imported & database restored successfully!")
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar("Import failed: ${err.localizedMessage}")
+                }
             }
         }
     }
@@ -132,14 +151,13 @@ fun SettingsScreen(
     var selectedLanguage by remember { mutableStateOf("English") }
     var selectedFontSize by remember { mutableStateOf("Medium") }
 
-    val context = androidx.compose.ui.platform.LocalContext.current
-
     // --- Notification Settings State ---
     var isPremiumReminder by remember { mutableStateOf(true) }
     var isDueTodayReminder by remember { mutableStateOf(true) }
     var isTomorrowReminder by remember { mutableStateOf(true) }
+    var isUpcomingReminder by remember { mutableStateOf(true) }
     var isOverdueReminder by remember { mutableStateOf(true) }
-    var isWhatsAppReminder by remember { mutableStateOf(com.example.whatsapp.WhatsAppAutomation.isWhatsAppRemindersEnabled(context)) }
+    var isWhatsAppReminder by remember { mutableStateOf(true) }
     var selectedReminderTime by remember { mutableStateOf("09:00 AM") }
     var selectedNotificationSound by remember { mutableStateOf("LIC Chime") }
     var isVibrationEnabled by remember { mutableStateOf(true) }
@@ -152,6 +170,12 @@ fun SettingsScreen(
     var isQrCodeEnabled by remember { mutableStateOf(true) }
     var isAutoReceiptNumber by remember { mutableStateOf(true) }
 
+    // --- Payment Settings State ---
+    var accountHolderNameState by remember { mutableStateOf("Pintu Ojha") }
+    var upiVpaIdState by remember { mutableStateOf("licagent@upi") }
+    var upiIdError by remember { mutableStateOf<String?>(null) }
+    var showTestQrDialog by remember { mutableStateOf(false) }
+
     // --- Backup Settings State ---
     var isAutoBackupEnabled by remember { mutableStateOf(true) }
     var isCloudSyncEnabled by remember { mutableStateOf(true) }
@@ -162,17 +186,114 @@ fun SettingsScreen(
     var isPinLockEnabled by remember { mutableStateOf(true) }
     var currentPinCode by remember { mutableStateOf("1234") }
     var isFingerprintEnabled by remember { mutableStateOf(true) }
-    var isFaceUnlockEnabled by remember { mutableStateOf(false) } // Placeholder
+    var isFaceUnlockEnabled by remember { mutableStateOf(false) }
     var selectedAutoLockTime by remember { mutableStateOf("5 Min") }
 
     // --- Data Management State ---
     var storageUsedMb by remember { mutableFloatStateOf(34.5f) }
+
+    // Load initial persistent settings
+    LaunchedEffect(Unit) {
+        val loaded = AppSettingsManager.getSettings(context, agentProfileState)
+        isDarkMode = loaded.isDarkMode
+        isSystemTheme = loaded.isSystemTheme
+        selectedLanguage = loaded.selectedLanguage
+        selectedFontSize = loaded.selectedFontSize
+
+        isPremiumReminder = loaded.isPremiumReminder
+        isDueTodayReminder = loaded.isDueTodayReminder
+        isTomorrowReminder = loaded.isTomorrowReminder
+        isUpcomingReminder = loaded.isUpcomingReminder
+        isOverdueReminder = loaded.isOverdueReminder
+        isWhatsAppReminder = loaded.isWhatsAppReminder
+        selectedReminderTime = loaded.selectedReminderTime
+        selectedNotificationSound = loaded.selectedNotificationSound
+        isVibrationEnabled = loaded.isVibrationEnabled
+
+        selectedReceiptSize = loaded.selectedReceiptSize
+        isReceiptHeaderEnabled = loaded.isReceiptHeaderEnabled
+        receiptHeaderTitle = loaded.receiptHeaderTitle
+        isAgentSignatureEnabled = loaded.isAgentSignatureOnReceipt
+        isQrCodeEnabled = loaded.isQrCodeOnReceipt
+        isAutoReceiptNumber = loaded.isAutoReceiptNumber
+
+        accountHolderNameState = loaded.accountHolderName
+        upiVpaIdState = loaded.upiVpaId
+
+        accountHolderNameState = loaded.accountHolderName
+        upiVpaIdState = loaded.upiVpaId
+
+        isAutoBackupEnabled = loaded.isAutoBackupEnabled
+        isCloudSyncEnabled = loaded.isCloudSyncEnabled
+        lastBackupText = loaded.lastBackupText
+
+        isAppLockEnabled = loaded.isAppLockEnabled
+        isPinLockEnabled = loaded.isPinLockEnabled
+        currentPinCode = loaded.pinCode
+        isFingerprintEnabled = loaded.isFingerprintEnabled
+        isFaceUnlockEnabled = loaded.isFaceUnlockEnabled
+        selectedAutoLockTime = loaded.selectedAutoLockTime
+
+        val dbFile = context.getDatabasePath("lic_reminder_pro_db")
+        val sizeMb = if (dbFile.exists()) (dbFile.length() / (1024f * 1024f)) + 12.4f else 18.5f
+        storageUsedMb = (sizeMb * 10).toInt() / 10f
+    }
+
+    // Auto-save setting changes helper
+    fun persistSettings() {
+        coroutineScope.launch(Dispatchers.IO) {
+            val currentSettings = AppSettingsData(
+                agentName = agentName,
+                agencyCode = agentCode,
+                branchCode = branchCode,
+                branchName = branchName,
+                mobileNumber = mobileNumber,
+                emailAddress = emailAddress,
+                officeAddress = officeAddress,
+                photoUri = photoUri,
+                isDarkMode = isDarkMode,
+                isSystemTheme = isSystemTheme,
+                selectedLanguage = selectedLanguage,
+                selectedFontSize = selectedFontSize,
+                isPremiumReminder = isPremiumReminder,
+                isDueTodayReminder = isDueTodayReminder,
+                isTomorrowReminder = isTomorrowReminder,
+                isUpcomingReminder = isUpcomingReminder,
+                isOverdueReminder = isOverdueReminder,
+                isWhatsAppReminder = isWhatsAppReminder,
+                selectedReminderTime = selectedReminderTime,
+                selectedNotificationSound = selectedNotificationSound,
+                isVibrationEnabled = isVibrationEnabled,
+                selectedReceiptSize = selectedReceiptSize,
+                isReceiptHeaderEnabled = isReceiptHeaderEnabled,
+                receiptHeaderTitle = receiptHeaderTitle,
+                isAgentSignatureOnReceipt = isAgentSignatureEnabled,
+                isQrCodeOnReceipt = isQrCodeEnabled,
+                isAutoReceiptNumber = isAutoReceiptNumber,
+                accountHolderName = accountHolderNameState,
+                upiVpaId = upiVpaIdState,
+                isAutoBackupEnabled = isAutoBackupEnabled,
+                isCloudSyncEnabled = isCloudSyncEnabled,
+                lastBackupText = lastBackupText,
+                isAppLockEnabled = isAppLockEnabled,
+                isPinLockEnabled = isPinLockEnabled,
+                pinCode = currentPinCode,
+                isFingerprintEnabled = isFingerprintEnabled,
+                isFaceUnlockEnabled = isFaceUnlockEnabled,
+                selectedAutoLockTime = selectedAutoLockTime
+            )
+            val db = AppDatabase.getDatabase(context)
+            AppSettingsManager.saveSettings(context, currentSettings, db, null)
+            viewModel?.triggerSync()
+        }
+    }
 
     // --- Dialog Controls ---
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showPinDialog by remember { mutableStateOf(false) }
+    var showBiometricPinVerifyDialog by remember { mutableStateOf(false) }
     var showResetDemoDialog by remember { mutableStateOf(false) }
     var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
     var showTermsDialog by remember { mutableStateOf(false) }
@@ -277,9 +398,7 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // ===================================================================
             // PROFILE CARD
-            // ===================================================================
             ProfileCardSection(
                 agentName = agentName,
                 agentCode = agentCode,
@@ -287,6 +406,7 @@ fun SettingsScreen(
                 branchName = branchName,
                 mobileNumber = mobileNumber,
                 emailAddress = emailAddress,
+                officeAddress = officeAddress,
                 photoUri = photoUri,
                 onUploadPhoto = { photoPickerLauncher.launch("image/*") },
                 onReplacePhoto = { photoPickerLauncher.launch("image/*") },
@@ -299,9 +419,11 @@ fun SettingsScreen(
                         branchName = branchName,
                         mobile = mobileNumber,
                         email = emailAddress,
+                        officeAddress = officeAddress,
                         photoUri = ""
                     )
                     viewModel?.saveAgentProfile(updated)
+                    persistSettings()
                     coroutineScope.launch {
                         snackbarHostState.showSnackbar("Profile photo removed")
                     }
@@ -309,118 +431,253 @@ fun SettingsScreen(
                 onEditProfileClick = { showEditProfileDialog = true }
             )
 
-            // ===================================================================
             // APP PREFERENCES
-            // ===================================================================
             AppPreferencesSection(
                 isDarkMode = isDarkMode,
-                onDarkModeChange = { isDarkMode = it },
+                onDarkModeChange = {
+                    isDarkMode = it
+                    persistSettings()
+                },
                 isSystemTheme = isSystemTheme,
-                onSystemThemeChange = { isSystemTheme = it },
+                onSystemThemeChange = {
+                    isSystemTheme = it
+                    persistSettings()
+                },
                 selectedLanguage = selectedLanguage,
-                onLanguageChange = { selectedLanguage = it },
+                onLanguageChange = {
+                    selectedLanguage = it
+                    persistSettings()
+                },
                 selectedFontSize = selectedFontSize,
-                onFontSizeChange = { selectedFontSize = it }
+                onFontSizeChange = {
+                    selectedFontSize = it
+                    persistSettings()
+                }
             )
 
-            // ===================================================================
             // NOTIFICATION SETTINGS
-            // ===================================================================
             NotificationSettingsSection(
                 isPremiumReminder = isPremiumReminder,
-                onPremiumReminderChange = { isPremiumReminder = it },
+                onPremiumReminderChange = {
+                    isPremiumReminder = it
+                    persistSettings()
+                },
                 isDueToday = isDueTodayReminder,
-                onDueTodayChange = { isDueTodayReminder = it },
+                onDueTodayChange = {
+                    isDueTodayReminder = it
+                    persistSettings()
+                },
                 isTomorrow = isTomorrowReminder,
-                onTomorrowChange = { isTomorrowReminder = it },
+                onTomorrowChange = {
+                    isTomorrowReminder = it
+                    persistSettings()
+                },
                 isOverdue = isOverdueReminder,
-                onOverdueChange = { isOverdueReminder = it },
+                onOverdueChange = {
+                    isOverdueReminder = it
+                    persistSettings()
+                },
                 isWhatsApp = isWhatsAppReminder,
                 onWhatsAppChange = {
                     isWhatsAppReminder = it
-                    com.example.whatsapp.WhatsAppAutomation.setWhatsAppRemindersEnabled(context, it)
+                    persistSettings()
                 },
                 selectedTime = selectedReminderTime,
-                onTimeChange = { selectedReminderTime = it },
+                onTimeChange = {
+                    selectedReminderTime = it
+                    persistSettings()
+                },
                 selectedSound = selectedNotificationSound,
-                onSoundChange = { selectedNotificationSound = it },
+                onSoundChange = {
+                    selectedNotificationSound = it
+                    persistSettings()
+                },
                 isVibration = isVibrationEnabled,
-                onVibrationChange = { isVibrationEnabled = it }
+                onVibrationChange = {
+                    isVibrationEnabled = it
+                    persistSettings()
+                }
             )
 
-            // ===================================================================
             // RECEIPT SETTINGS
-            // ===================================================================
             ReceiptSettingsSection(
                 selectedSize = selectedReceiptSize,
-                onSizeChange = { selectedReceiptSize = it },
+                onSizeChange = {
+                    selectedReceiptSize = it
+                    persistSettings()
+                },
                 isHeader = isReceiptHeaderEnabled,
-                onHeaderChange = { isReceiptHeaderEnabled = it },
+                onHeaderChange = {
+                    isReceiptHeaderEnabled = it
+                    persistSettings()
+                },
                 headerTitle = receiptHeaderTitle,
-                onHeaderTitleChange = { receiptHeaderTitle = it },
+                onHeaderTitleChange = {
+                    receiptHeaderTitle = it
+                    persistSettings()
+                },
                 isSignature = isAgentSignatureEnabled,
-                onSignatureChange = { isAgentSignatureEnabled = it },
+                onSignatureChange = {
+                    isAgentSignatureEnabled = it
+                    persistSettings()
+                },
                 isQrCode = isQrCodeEnabled,
-                onQrCodeChange = { isQrCodeEnabled = it },
+                onQrCodeChange = {
+                    isQrCodeEnabled = it
+                    persistSettings()
+                },
                 isAutoReceipt = isAutoReceiptNumber,
-                onAutoReceiptChange = { isAutoReceiptNumber = it }
+                onAutoReceiptChange = {
+                    isAutoReceiptNumber = it
+                    persistSettings()
+                }
             )
 
-            // ===================================================================
-            // BACKUP SETTINGS
-            // ===================================================================
-            BackupSettingsSection(
-                isAutoBackup = isAutoBackupEnabled,
-                onAutoBackupChange = { isAutoBackupEnabled = it },
-                isCloudSync = isCloudSyncEnabled,
-                onCloudSyncChange = { isCloudSyncEnabled = it },
-                lastBackupText = lastBackupText,
-                onBackupNowClick = {
+            // PAYMENT SETTINGS
+            PaymentSettingsSection(
+                accountHolderName = accountHolderNameState,
+                onAccountHolderNameChange = {
+                    accountHolderNameState = it
+                },
+                upiVpaId = upiVpaIdState,
+                onUpiVpaIdChange = {
+                    upiVpaIdState = it
+                    if (com.example.util.QrCodeGenerator.isValidUpiId(it)) {
+                        upiIdError = null
+                    }
+                },
+                upiIdError = upiIdError,
+                onSaveClick = {
+                    if (com.example.util.QrCodeGenerator.isValidUpiId(upiVpaIdState)) {
+                        upiIdError = null
+                        persistSettings()
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Payment Settings saved successfully!")
+                        }
+                    } else {
+                        upiIdError = "Invalid UPI ID format. Example: name@oksbi, name@ybl"
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Invalid UPI ID format. Must include @ (e.g. name@oksbi)")
+                        }
+                    }
+                },
+                onTestQrClick = {
+                    if (com.example.util.QrCodeGenerator.isValidUpiId(upiVpaIdState)) {
+                        upiIdError = null
+                        showTestQrDialog = true
+                    } else {
+                        upiIdError = "Invalid UPI ID format. Example: name@oksbi"
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Please enter a valid UPI ID before testing QR.")
+                        }
+                    }
+                },
+                onResetClick = {
+                    accountHolderNameState = agentName.ifEmpty { "Pintu Ojha" }
+                    upiVpaIdState = "licagent@upi"
+                    upiIdError = null
+                    persistSettings()
                     coroutineScope.launch {
-                        lastBackupText = "Just now • 14.3 MB"
-                        snackbarHostState.showSnackbar("Backup snapshot generated successfully!")
+                        snackbarHostState.showSnackbar("Payment settings reset to defaults.")
                     }
                 }
             )
 
-            // ===================================================================
-            // SECURITY
-            // ===================================================================
-            SecuritySettingsSection(
-                isAppLock = isAppLockEnabled,
-                onAppLockChange = { isAppLockEnabled = it },
-                isPinLock = isPinLockEnabled,
-                onPinLockChange = { isPinLockEnabled = it },
-                onSetPinClick = { showPinDialog = true },
-                isFingerprint = isFingerprintEnabled,
-                onFingerprintChange = { isFingerprintEnabled = it },
-                isFaceUnlock = isFaceUnlockEnabled,
-                onFaceUnlockChange = { isFaceUnlockEnabled = it },
-                selectedAutoLockTime = selectedAutoLockTime,
-                onAutoLockTimeChange = { selectedAutoLockTime = it }
+            // BACKUP SETTINGS
+            BackupSettingsSection(
+                isAutoBackup = isAutoBackupEnabled,
+                onAutoBackupChange = { enabled ->
+                    isAutoBackupEnabled = enabled
+                    persistSettings()
+                    if (enabled) {
+                        coroutineScope.launch { snackbarHostState.showSnackbar("Auto Backup scheduled daily") }
+                    } else {
+                        coroutineScope.launch { snackbarHostState.showSnackbar("Auto Backup disabled") }
+                    }
+                },
+                isCloudSync = isCloudSyncEnabled,
+                onCloudSyncChange = {
+                    isCloudSyncEnabled = it
+                    persistSettings()
+                },
+                lastBackupText = lastBackupText,
+                onBackupNowClick = {
+                    coroutineScope.launch {
+                        val db = AppDatabase.getDatabase(context)
+                        val res = com.example.data.backup.BackupManager.createFullBackup(context, db)
+                        res.onSuccess { item ->
+                            lastBackupText = "Just now • ${item.size}"
+                            persistSettings()
+                            snackbarHostState.showSnackbar("Backup created & saved safely (${item.size})!")
+                        }.onFailure { err ->
+                            snackbarHostState.showSnackbar("Backup failed: ${err.message}")
+                        }
+                    }
+                }
             )
 
-            // ===================================================================
+            // SECURITY SETTINGS
+            SecuritySettingsSection(
+                isAppLock = isAppLockEnabled,
+                onAppLockChange = {
+                    isAppLockEnabled = it
+                    persistSettings()
+                },
+                isPinLock = isPinLockEnabled,
+                onPinLockChange = {
+                    isPinLockEnabled = it
+                    persistSettings()
+                },
+                onSetPinClick = { showPinDialog = true },
+                isFingerprint = isFingerprintEnabled,
+                onFingerprintChange = { enable ->
+                    if (enable) {
+                        if (currentPinCode.isNotBlank()) {
+                            showBiometricPinVerifyDialog = true
+                        } else {
+                            isFingerprintEnabled = true
+                            persistSettings()
+                        }
+                    } else {
+                        isFingerprintEnabled = false
+                        persistSettings()
+                    }
+                },
+                isFaceUnlock = isFaceUnlockEnabled,
+                onFaceUnlockChange = {
+                    isFaceUnlockEnabled = it
+                    persistSettings()
+                },
+                selectedAutoLockTime = selectedAutoLockTime,
+                onAutoLockTimeChange = {
+                    selectedAutoLockTime = it
+                    persistSettings()
+                }
+            )
+
             // DATA MANAGEMENT
-            // ===================================================================
             DataManagementSection(
                 storageUsedMb = storageUsedMb,
                 onExportDataClick = {
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Encrypted dataset exported to Downloads folder")
+                    coroutineScope.launch(Dispatchers.IO) {
+                        val db = AppDatabase.getDatabase(context)
+                        val res = com.example.data.backup.BackupManager.createFullBackup(context, db)
+                        res.onSuccess { item ->
+                            lastBackupText = "Just now • ${item.size}"
+                            persistSettings()
+                            snackbarHostState.showSnackbar("Full encrypted dataset exported successfully (${item.size})!")
+                        }.onFailure { err ->
+                            snackbarHostState.showSnackbar("Export failed: ${err.localizedMessage}")
+                        }
                     }
                 },
                 onImportDataClick = {
-                    coroutineScope.launch {
-                        snackbarHostState.showSnackbar("Import backup file launcher opened")
-                    }
+                    importLauncher.launch("*/*")
                 },
                 onResetDemoClick = { showResetDemoDialog = true }
             )
 
-            // ===================================================================
-            // SUPPORT
-            // ===================================================================
+            // SUPPORT SECTION
             SupportSection(
                 onHelpCenterClick = { showHelpDialog = true },
                 onContactSupportClick = {
@@ -443,9 +700,7 @@ fun SettingsScreen(
                 onAboutClick = { showAboutDialog = true }
             )
 
-            // ===================================================================
             // LOGOUT BUTTON
-            // ===================================================================
             OutlinedButton(
                 onClick = onLogout,
                 modifier = Modifier
@@ -471,7 +726,6 @@ fun SettingsScreen(
                 )
             }
 
-            // BOTTOM SAFE AREA SPACING
             Spacer(modifier = Modifier.height(32.dp))
         }
     }
@@ -479,6 +733,14 @@ fun SettingsScreen(
     // ===================================================================
     // MODALS & DIALOGS
     // ===================================================================
+
+    if (showTestQrDialog) {
+        TestQrModalDialog(
+            accountHolderName = accountHolderNameState,
+            upiVpaId = upiVpaIdState,
+            onDismiss = { showTestQrDialog = false }
+        )
+    }
 
     // Edit Profile Dialog
     if (showEditProfileDialog) {
@@ -488,6 +750,7 @@ fun SettingsScreen(
         var tempBranchName by remember { mutableStateOf(branchName) }
         var tempMobile by remember { mutableStateOf(mobileNumber) }
         var tempEmail by remember { mutableStateOf(emailAddress) }
+        var tempOffice by remember { mutableStateOf(officeAddress) }
         var showSearchBranchDialog by remember { mutableStateOf(false) }
 
         val foundBranch = remember(tempBranchCode) { LicBranchMaster.findBranchByCode(tempBranchCode) }
@@ -529,6 +792,7 @@ fun SettingsScreen(
                                 branchName = tempBranchName,
                                 mobile = tempMobile,
                                 email = tempEmail,
+                                officeAddress = tempOffice,
                                 photoUri = ""
                             )
                             viewModel?.saveAgentProfile(updated)
@@ -551,7 +815,6 @@ fun SettingsScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // --- BRANCH CODE FIELD WITH SEARCH BUTTON & VALIDATION ---
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -616,7 +879,6 @@ fun SettingsScreen(
                             }
                         }
 
-                        // Smooth Validation Animation
                         AnimatedVisibility(
                             visible = isBranchCodeInvalid,
                             enter = fadeIn(animationSpec = tween(250)) + slideInVertically(initialOffsetY = { -8 }),
@@ -632,10 +894,9 @@ fun SettingsScreen(
                         }
                     }
 
-                    // --- BRANCH NAME FIELD (READ ONLY) ---
                     OutlinedTextField(
                         value = tempBranchName,
-                        onValueChange = {}, // Read Only - not manually editable
+                        onValueChange = {},
                         readOnly = true,
                         enabled = false,
                         label = { Text("Branch Name (Read Only)", color = TextMuted) },
@@ -674,6 +935,14 @@ fun SettingsScreen(
                         colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    OutlinedTextField(
+                        value = tempOffice,
+                        onValueChange = { tempOffice = it },
+                        label = { Text("Office Address", color = TextMuted) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("edit_office_address_field")
+                    )
                 }
             },
             confirmButton = {
@@ -687,6 +956,7 @@ fun SettingsScreen(
                         branchName = tempBranchName
                         mobileNumber = tempMobile
                         emailAddress = tempEmail
+                        officeAddress = tempOffice
                         val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
                             agentName = tempName,
                             agencyCode = tempCode,
@@ -694,12 +964,14 @@ fun SettingsScreen(
                             branchName = tempBranchName,
                             mobile = tempMobile,
                             email = tempEmail,
+                            officeAddress = tempOffice,
                             photoUri = photoUri
                         )
                         viewModel?.saveAgentProfile(updated)
+                        persistSettings()
                         showEditProfileDialog = false
                         coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Agent profile updated successfully!")
+                            snackbarHostState.showSnackbar("Agent profile updated & synced successfully!")
                         }
                     },
                     enabled = !isBranchCodeInvalid,
@@ -719,7 +991,6 @@ fun SettingsScreen(
             }
         )
 
-        // Search Branch Picker Modal
         if (showSearchBranchDialog) {
             SearchBranchDialog(
                 currentCode = tempBranchCode,
@@ -763,6 +1034,21 @@ fun SettingsScreen(
     // Set PIN Dialog
     if (showPinDialog) {
         var newPin by remember { mutableStateOf("") }
+        var confirmPin by remember { mutableStateOf("") }
+        var recoveryQuestion by remember {
+            mutableStateOf(com.example.util.SecurityUtils.getRecoveryQuestion(context))
+        }
+        var recoveryAnswer by remember { mutableStateOf("") }
+        var recoveryEmail by remember {
+            mutableStateOf(
+                com.example.util.SecurityUtils.getRecoveryEmail(context).ifBlank {
+                    agentProfileState?.email ?: ""
+                }
+            )
+        }
+        var showQuestionDropdown by remember { mutableStateOf(false) }
+        var pinError by remember { mutableStateOf("") }
+
         AlertDialog(
             onDismissRequest = { showPinDialog = false },
             containerColor = CardBg,
@@ -770,39 +1056,252 @@ fun SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Pin, contentDescription = null, tint = RoyalBlueLight)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Set 4-Digit Security PIN", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text(
+                        if (currentPinCode.isBlank()) "Create Security PIN & Recovery" else "Change Security PIN & Recovery",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
                 }
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Enter a new 4-digit passcode for instant application unlocking.", color = TextMuted, fontSize = 12.5.sp)
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Set up your 4-digit passcode and emergency recovery details.", color = TextMuted, fontSize = 12.5.sp)
+
                     OutlinedTextField(
                         value = newPin,
-                        onValueChange = { if (it.length <= 4) newPin = it },
+                        onValueChange = {
+                            if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                newPin = it
+                                pinError = ""
+                            }
+                        },
                         label = { Text("4-Digit PIN", color = TextMuted) },
                         singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        ),
                         colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
                         modifier = Modifier.fillMaxWidth().testTag("pin_input_field")
                     )
+
+                    OutlinedTextField(
+                        value = confirmPin,
+                        onValueChange = {
+                            if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                confirmPin = it
+                                pinError = ""
+                            }
+                        },
+                        label = { Text("Confirm 4-Digit PIN", color = TextMuted) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("confirm_pin_input_field")
+                    )
+
+                    HorizontalDivider(color = RoyalBlueLight.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 4.dp))
+
+                    Text("Emergency Recovery Setup", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+
+                    // Recovery Question Dropdown / Custom Input
+                    Box {
+                        OutlinedTextField(
+                            value = recoveryQuestion,
+                            onValueChange = {
+                                recoveryQuestion = it
+                                pinError = ""
+                            },
+                            label = { Text("Recovery Question", color = TextMuted) },
+                            singleLine = true,
+                            trailingIcon = {
+                                IconButton(onClick = { showQuestionDropdown = !showQuestionDropdown }) {
+                                    Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Question", tint = RoyalBlueLight)
+                                }
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                            modifier = Modifier.fillMaxWidth().testTag("recovery_question_input")
+                        )
+
+                        DropdownMenu(
+                            expanded = showQuestionDropdown,
+                            onDismissRequest = { showQuestionDropdown = false },
+                            modifier = Modifier.background(CardBg)
+                        ) {
+                            com.example.util.SecurityUtils.DEFAULT_RECOVERY_QUESTIONS.forEach { q ->
+                                DropdownMenuItem(
+                                    text = { Text(q, color = TextWhite, fontSize = 13.sp) },
+                                    onClick = {
+                                        recoveryQuestion = q
+                                        showQuestionDropdown = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = recoveryAnswer,
+                        onValueChange = {
+                            recoveryAnswer = it
+                            pinError = ""
+                        },
+                        label = { Text("Recovery Answer", color = TextMuted) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("recovery_answer_setup_input")
+                    )
+
+                    OutlinedTextField(
+                        value = recoveryEmail,
+                        onValueChange = {
+                            recoveryEmail = it
+                            pinError = ""
+                        },
+                        label = { Text("Optional Recovery Email", color = TextMuted) },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Email
+                        ),
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("recovery_email_input")
+                    )
+
+                    if (pinError.isNotBlank()) {
+                        Text(pinError, color = AccentRed, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (currentPinCode.isNotBlank()) {
+                        TextButton(
+                            onClick = {
+                                currentPinCode = ""
+                                isPinLockEnabled = false
+                                val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(pinCode = "")
+                                viewModel?.saveAgentProfile(updated)
+                                persistSettings()
+                                showPinDialog = false
+                                coroutineScope.launch { snackbarHostState.showSnackbar("Security PIN removed") }
+                            }
+                        ) {
+                            Text("Remove PIN", color = AccentRed)
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            val cleanAnswer = recoveryAnswer.trim()
+                            val cleanQuestion = recoveryQuestion.trim()
+
+                            if (newPin.length != 4) {
+                                pinError = "PIN must be exactly 4 digits."
+                            } else if (newPin != confirmPin) {
+                                pinError = "PINs do not match."
+                            } else if (cleanQuestion.isBlank()) {
+                                pinError = "Please enter or select a Recovery Question."
+                            } else if (cleanAnswer.length < 2) {
+                                pinError = "Recovery Answer must be at least 2 characters."
+                            } else {
+                                val hashedPin = com.example.util.SecurityUtils.hashPin(newPin)
+                                currentPinCode = hashedPin
+                                isPinLockEnabled = true
+
+                                // Save Emergency Recovery Info securely
+                                com.example.util.SecurityUtils.saveRecoveryInfo(
+                                    context = context,
+                                    question = cleanQuestion,
+                                    answer = cleanAnswer,
+                                    email = recoveryEmail.trim()
+                                )
+
+                                val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(pinCode = hashedPin)
+                                viewModel?.saveAgentProfile(updated)
+                                persistSettings()
+                                showPinDialog = false
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Security PIN and Emergency Recovery setup saved!")
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBlueLight)
+                    ) {
+                        Text("Save Setup", color = TextWhite)
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPinDialog = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
+
+    if (showBiometricPinVerifyDialog) {
+        var verifyPin by remember { mutableStateOf("") }
+        var verifyError by remember { mutableStateOf("") }
+
+        AlertDialog(
+            onDismissRequest = { showBiometricPinVerifyDialog = false },
+            containerColor = CardBg,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Fingerprint, contentDescription = null, tint = RoyalBlueLight)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Verify PIN for Biometrics",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Enter your 4-digit PIN to enable biometric authentication.", color = TextMuted, fontSize = 12.5.sp)
+                    OutlinedTextField(
+                        value = verifyPin,
+                        onValueChange = {
+                            if (it.length <= 4 && it.all { char -> char.isDigit() }) {
+                                verifyPin = it
+                                verifyError = ""
+                            }
+                        },
+                        label = { Text("Enter 4-Digit PIN", color = TextMuted) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                        modifier = Modifier.fillMaxWidth().testTag("verify_pin_biometric_input")
+                    )
+                    if (verifyError.isNotBlank()) {
+                        Text(verifyError, color = AccentRed, fontSize = 12.sp)
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (newPin.length == 4) {
-                            currentPinCode = newPin
-                            isPinLockEnabled = true
-                            showPinDialog = false
-                            coroutineScope.launch { snackbarHostState.showSnackbar("Security PIN updated!") }
+                        if (com.example.util.SecurityUtils.isPinValid(verifyPin, currentPinCode)) {
+                            isFingerprintEnabled = true
+                            persistSettings()
+                            showBiometricPinVerifyDialog = false
+                            coroutineScope.launch { snackbarHostState.showSnackbar("Biometric login enabled successfully!") }
+                        } else {
+                            verifyError = "Incorrect PIN. Verification failed."
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBlueLight)
                 ) {
-                    Text("Save PIN", color = TextWhite)
+                    Text("Enable Biometrics", color = TextWhite)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showPinDialog = false }) {
+                TextButton(onClick = { showBiometricPinVerifyDialog = false }) {
                     Text("Cancel", color = TextMuted)
                 }
             }
@@ -832,7 +1331,16 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         showResetDemoDialog = false
-                        coroutineScope.launch { snackbarHostState.showSnackbar("Demo data environment refreshed") }
+                        coroutineScope.launch(Dispatchers.IO) {
+                            try {
+                                val db = AppDatabase.getDatabase(context)
+                                AppDatabase.repopulateDemoData(db)
+                                viewModel?.triggerSync()
+                                snackbarHostState.showSnackbar("Demo data environment successfully reset!")
+                            } catch (e: Throwable) {
+                                snackbarHostState.showSnackbar("Reset failed: ${e.localizedMessage}")
+                            }
+                        }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = AccentAmber)
                 ) {
@@ -918,7 +1426,7 @@ fun SettingsScreen(
 }
 
 // ===========================================================================
-// SUB-SECTIONS (20dp Rounded Cards, 16dp Spacing, Responsive Layouts)
+// SUB-SECTIONS
 // ===========================================================================
 
 @Composable
@@ -945,7 +1453,6 @@ fun AgentProfilePhotoHeader(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Large Circular Profile Photo (96dp)
         Box(
             modifier = Modifier
                 .size(96.dp)
@@ -985,68 +1492,55 @@ fun AgentProfilePhotoHeader(
                                 .clip(CircleShape)
                         )
                     } else {
-                        // Premium Placeholder Avatar
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = agentInitials,
-                                style = TextStyle(
-                                    color = TextWhite,
-                                    fontSize = 32.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp
-                                )
+                                style = MaterialTheme.typography.titleLarge,
+                                color = TextWhite,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 28.sp
                             )
                         }
                     }
                 }
             }
 
-            // Camera Icon Overlay at Bottom-Right
             Box(
                 modifier = Modifier
-                    .size(30.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
                     .background(RoyalBlueLight)
                     .border(2.dp, CardBg, CircleShape)
-                    .clickable {
-                        if (photoUri.isNotBlank()) onReplacePhoto() else onUploadPhoto()
-                    },
+                    .clickable { onReplacePhoto() },
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.PhotoCamera,
-                    contentDescription = "Change Profile Photo",
-                    tint = Color.White,
-                    modifier = Modifier.size(16.dp)
+                    imageVector = Icons.Default.CameraAlt,
+                    contentDescription = "Camera",
+                    tint = TextWhite,
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
 
-        // Photo Action Buttons (Upload Photo, Replace Photo, Remove Photo)
         Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (photoUri.isBlank()) {
                 Button(
                     onClick = onUploadPhoto,
                     shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = RoyalBlueLight,
-                        contentColor = TextWhite
-                    ),
-                    modifier = Modifier.testTag("upload_profile_photo_button")
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBlueLight),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Upload,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Upload Photo", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Upload Photo", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             } else {
                 OutlinedButton(
@@ -1054,61 +1548,50 @@ fun AgentProfilePhotoHeader(
                     shape = RoundedCornerShape(12.dp),
                     border = BorderStroke(1.dp, RoyalBlueGlow),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = RoyalBlueGlow),
-                    modifier = Modifier.testTag("replace_profile_photo_button")
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Sync,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Replace Photo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Replace", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
 
-                OutlinedButton(
+                TextButton(
                     onClick = onRemovePhoto,
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.6f)),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF87171)),
-                    modifier = Modifier.testTag("remove_profile_photo_button")
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.height(36.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Remove Photo", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Icon(Icons.Default.Delete, contentDescription = null, tint = AccentRed, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Remove", fontSize = 12.sp, color = AccentRed, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
     }
 }
 
-/**
- * 1. PROFILE CARD SECTION
- */
 @Composable
 fun ProfileCardSection(
     agentName: String,
     agentCode: String,
-    branchCode: String = "",
+    branchCode: String,
     branchName: String,
     mobileNumber: String,
     emailAddress: String,
-    photoUri: String = "",
-    onUploadPhoto: () -> Unit = {},
-    onReplacePhoto: () -> Unit = {},
-    onRemovePhoto: () -> Unit = {},
+    officeAddress: String,
+    photoUri: String,
+    onUploadPhoto: () -> Unit,
+    onReplacePhoto: () -> Unit,
+    onRemovePhoto: () -> Unit,
     onEditProfileClick: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("profile_card_section")
+            .testTag("settings_profile_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
@@ -1119,29 +1602,40 @@ fun ProfileCardSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "AGENT PROFILE",
-                    color = RoyalBlueGlow,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.5.sp,
-                    letterSpacing = 1.sp
-                )
-
-                Surface(
-                    color = RoyalBluePrimary.copy(alpha = 0.3f),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Badge,
+                        contentDescription = null,
+                        tint = RoyalBlueGlow,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "Verified LIC Agent",
+                        text = "Agent Profile",
                         color = TextWhite,
-                        fontSize = 10.5.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        fontSize = 17.sp
+                    )
+                }
+
+                IconButton(
+                    onClick = onEditProfileClick,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF0F172A))
+                        .border(1.dp, CardBorder, CircleShape)
+                        .testTag("edit_profile_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Profile",
+                        tint = RoyalBlueGlow,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            // Agent Profile Photo Section
             AgentProfilePhotoHeader(
                 photoUri = photoUri,
                 agentName = agentName,
@@ -1150,58 +1644,47 @@ fun ProfileCardSection(
                 onRemovePhoto = onRemovePhoto
             )
 
-            HorizontalDivider(color = CardBorder)
+            HorizontalDivider(color = CardBorder, thickness = 1.dp)
 
-            // Details Column
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = agentName,
-                    color = TextWhite,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-                Text(
-                    text = if (branchCode.isNotBlank()) "Code: $agentCode • $branchName ($branchCode)" else "Code: $agentCode • $branchName",
-                    color = RoyalBlueGlow,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "$mobileNumber • $emailAddress",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            HorizontalDivider(color = CardBorder)
-
-            Button(
-                onClick = onEditProfileClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("edit_profile_button"),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = RoyalBlueLight,
-                    contentColor = TextWhite
-                )
-            ) {
-                Icon(imageVector = Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "Edit Profile Info", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ProfileInfoRow(label = "Agent Name", value = agentName)
+                ProfileInfoRow(label = "Agency Code", value = agentCode, isHighlight = true)
+                ProfileInfoRow(label = "Branch", value = "$branchCode • $branchName")
+                ProfileInfoRow(label = "Mobile", value = mobileNumber)
+                ProfileInfoRow(label = "Email", value = emailAddress)
+                ProfileInfoRow(label = "Office Address", value = officeAddress)
             }
         }
     }
 }
 
-/**
- * 2. APP PREFERENCES SECTION
- */
+@Composable
+fun ProfileInfoRow(
+    label: String,
+    value: String,
+    isHighlight: Boolean = false
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            color = TextMuted,
+            fontSize = 13.sp
+        )
+        Text(
+            text = value,
+            color = if (isHighlight) AccentGreen else TextWhite,
+            fontWeight = if (isHighlight) FontWeight.Bold else FontWeight.SemiBold,
+            fontSize = 13.5.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
 @Composable
 fun AppPreferencesSection(
     isDarkMode: Boolean,
@@ -1214,98 +1697,72 @@ fun AppPreferencesSection(
     onFontSizeChange: (String) -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("app_preferences_section")
+            .testTag("settings_app_preferences_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "APP PREFERENCES",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.Palette, title = "App Preferences")
 
-            // Dark Mode Switch
-            SettingsSwitchRowItem(
-                icon = Icons.Default.DarkMode,
-                title = "Dark Mode",
-                subtitle = "Royal Blue banking dark interface",
-                checked = isDarkMode,
-                onCheckedChange = onDarkModeChange,
-                tag = "dark_mode_switch"
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SwitchSettingRow(
+                    title = "Dark Theme Mode",
+                    subtitle = "High contrast dark palette optimized for OLED screens",
+                    checked = isDarkMode,
+                    onCheckedChange = onDarkModeChange
+                )
 
-            HorizontalDivider(color = CardBorder)
+                SwitchSettingRow(
+                    title = "Follow System Theme",
+                    subtitle = "Automatically match system dark/light settings",
+                    checked = isSystemTheme,
+                    onCheckedChange = onSystemThemeChange
+                )
 
-            // System Theme Switch
-            SettingsSwitchRowItem(
-                icon = Icons.Default.SettingsSuggest,
-                title = "System Theme",
-                subtitle = "Match device display theme automatically",
-                checked = isSystemTheme,
-                onCheckedChange = onSystemThemeChange,
-                tag = "system_theme_switch"
-            )
+                HorizontalDivider(color = CardBorder, thickness = 1.dp)
 
-            HorizontalDivider(color = CardBorder)
-
-            // Language Selection Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Language", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("English", "Hindi", "Marathi", "Gujarati")) { lang ->
-                        val isSelected = selectedLanguage == lang
-                        Surface(
-                            onClick = { onLanguageChange(lang) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder)
-                        ) {
-                            Text(
-                                text = lang,
-                                color = TextWhite,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Application Language", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf("English", "Hindi", "Odia", "Marathi").forEach { lang ->
+                            FilterChip(
+                                selected = selectedLanguage == lang,
+                                onClick = { onLanguageChange(lang) },
+                                label = { Text(lang, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalBlueLight,
+                                    selectedLabelColor = TextWhite,
+                                    containerColor = Color(0xFF0F172A),
+                                    labelColor = TextMuted
+                                )
                             )
                         }
                     }
                 }
-            }
 
-            HorizontalDivider(color = CardBorder)
-
-            // Font Size Selection Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Font Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("Small", "Medium", "Large").forEach { size ->
-                        val isSelected = selectedFontSize == size
-                        Surface(
-                            onClick = { onFontSizeChange(size) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = size,
-                                color = TextWhite,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Display Font Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Small", "Medium", "Large").forEach { size ->
+                            FilterChip(
+                                selected = selectedFontSize == size,
+                                onClick = { onFontSizeChange(size) },
+                                label = { Text(size, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalBlueLight,
+                                    selectedLabelColor = TextWhite,
+                                    containerColor = Color(0xFF0F172A),
+                                    labelColor = TextMuted
+                                )
                             )
                         }
                     }
@@ -1315,9 +1772,6 @@ fun AppPreferencesSection(
     }
 }
 
-/**
- * 3. NOTIFICATION SETTINGS SECTION
- */
 @Composable
 fun NotificationSettingsSection(
     isPremiumReminder: Boolean,
@@ -1338,138 +1792,70 @@ fun NotificationSettingsSection(
     onVibrationChange: (Boolean) -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("notification_settings_section")
+            .testTag("settings_notification_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "NOTIFICATION SETTINGS",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.NotificationsActive, title = "Notification & Reminder Engine")
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.NotificationsActive,
-                title = "Premium Reminder",
-                subtitle = "Master switch for policy renewal alerts",
+            SwitchSettingRow(
+                title = "Automated Dues Reminders",
+                subtitle = "Master switch for scheduled push alerts and notifications",
                 checked = isPremiumReminder,
                 onCheckedChange = onPremiumReminderChange
             )
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Today,
-                title = "Due Today",
-                subtitle = "Alerts for policies renewing today",
-                checked = isDueToday,
-                onCheckedChange = onDueTodayChange
-            )
+            if (isPremiumReminder) {
+                HorizontalDivider(color = CardBorder, thickness = 1.dp)
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Event,
-                title = "Tomorrow Reminder",
-                subtitle = "1-day advance warning notifications",
-                checked = isTomorrow,
-                onCheckedChange = onTomorrowChange
-            )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Trigger Categories", color = RoyalBlueGlow, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Warning,
-                title = "Overdue Reminder",
-                subtitle = "Lapsed & grace period payment alerts",
-                checked = isOverdue,
-                onCheckedChange = onOverdueChange
-            )
+                    SwitchSettingRow(title = "Due Today Alerts", subtitle = "Morning alert at 09:00 AM for today's collections", checked = isDueToday, onCheckedChange = onDueTodayChange)
+                    SwitchSettingRow(title = "Tomorrow Dues Warning", subtitle = "24-hour advance notice for upcoming due dates", checked = isTomorrow, onCheckedChange = onTomorrowChange)
+                    SwitchSettingRow(title = "Overdue Lapsed Follow-up", subtitle = "Automated escalation for overdue policies", checked = isOverdue, onCheckedChange = onOverdueChange)
+                    SwitchSettingRow(title = "WhatsApp Automation Integration", subtitle = "Auto-prepare WhatsApp template messages", checked = isWhatsApp, onCheckedChange = onWhatsAppChange)
+                }
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Chat,
-                title = "WhatsApp Reminder",
-                subtitle = "Auto-formatted WhatsApp message triggers",
-                checked = isWhatsApp,
-                onCheckedChange = onWhatsAppChange
-            )
+                HorizontalDivider(color = CardBorder, thickness = 1.dp)
 
-            HorizontalDivider(color = CardBorder)
-
-            // Reminder Time Picker Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Reminder Time", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("08:00 AM", "09:00 AM", "02:00 PM", "07:00 PM").forEach { timeStr ->
-                        val isSelected = selectedTime == timeStr
-                        Surface(
-                            onClick = { onTimeChange(timeStr) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = timeStr,
-                                color = TextWhite,
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Daily Schedule Time", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("08:00 AM", "09:00 AM", "10:00 AM", "06:00 PM").forEach { time ->
+                            FilterChip(
+                                selected = selectedTime == time,
+                                onClick = { onTimeChange(time) },
+                                label = { Text(time, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalBlueLight,
+                                    selectedLabelColor = TextWhite,
+                                    containerColor = Color(0xFF0F172A),
+                                    labelColor = TextMuted
+                                )
                             )
                         }
                     }
                 }
+
+                SwitchSettingRow(
+                    title = "Vibration Alert",
+                    subtitle = "Haptic feedback on notification triggers",
+                    checked = isVibration,
+                    onCheckedChange = onVibrationChange
+                )
             }
-
-            HorizontalDivider(color = CardBorder)
-
-            // Notification Sound Selection Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Notification Sound", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(listOf("LIC Chime", "Gentle Bell", "Default Tone", "Silent")) { sound ->
-                        val isSelected = selectedSound == sound
-                        Surface(
-                            onClick = { onSoundChange(sound) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder)
-                        ) {
-                            Text(
-                                text = sound,
-                                color = TextWhite,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Vibration,
-                title = "Vibration",
-                subtitle = "Haptic feedback on reminder alerts",
-                checked = isVibration,
-                onCheckedChange = onVibrationChange
-            )
         }
     }
 }
 
-/**
- * 4. RECEIPT SETTINGS SECTION
- */
 @Composable
 fun ReceiptSettingsSection(
     selectedSize: String,
@@ -1486,60 +1872,41 @@ fun ReceiptSettingsSection(
     onAutoReceiptChange: (Boolean) -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("receipt_settings_section")
+            .testTag("settings_receipt_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "RECEIPT SETTINGS",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.Receipt, title = "Receipt & PDF Generator")
 
-            // Receipt Size Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Receipt Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("A5", "Thermal 3\"", "A4 Sheet").forEach { size ->
-                        val isSelected = selectedSize == size
-                        Surface(
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("A5", "A4", "Thermal 3-inch").forEach { size ->
+                        FilterChip(
+                            selected = selectedSize == size,
                             onClick = { onSizeChange(size) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = size,
-                                color = TextWhite,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
+                            label = { Text(size, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = RoyalBlueLight,
+                                selectedLabelColor = TextWhite,
+                                containerColor = Color(0xFF0F172A),
+                                labelColor = TextMuted
                             )
-                        }
+                        )
                     }
                 }
             }
 
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Title,
+            SwitchSettingRow(
                 title = "Receipt Header",
-                subtitle = "Print custom title banner on receipts",
+                subtitle = "Include official LIC logo and customizable header title",
                 checked = isHeader,
                 onCheckedChange = onHeaderChange
             )
@@ -1548,43 +1915,29 @@ fun ReceiptSettingsSection(
                 OutlinedTextField(
                     value = headerTitle,
                     onValueChange = onHeaderTitleChange,
-                    label = { Text("Custom Header Text", color = TextMuted) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextWhite,
-                        unfocusedTextColor = TextWhite,
-                        focusedBorderColor = RoyalBlueLight,
-                        unfocusedBorderColor = CardBorder
-                    ),
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Custom Header Title", color = TextMuted) },
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                    modifier = Modifier.fillMaxWidth().testTag("receipt_header_title_field")
                 )
             }
 
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Draw,
-                title = "Agent Signature",
-                subtitle = "Attach digital agent signature mark",
+            SwitchSettingRow(
+                title = "Agent Digital Signature",
+                subtitle = "Attach digital signature line at bottom of PDF receipts",
                 checked = isSignature,
                 onCheckedChange = onSignatureChange
             )
 
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.QrCode,
-                title = "QR Code",
-                subtitle = "Embed UPI payment validation QR on PDFs",
+            SwitchSettingRow(
+                title = "QR Verification Code",
+                subtitle = "Print scan-to-verify QR code on every receipt",
                 checked = isQrCode,
                 onCheckedChange = onQrCodeChange
             )
 
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Numbers,
+            SwitchSettingRow(
                 title = "Auto Receipt Number",
-                subtitle = "Sequential automatic receipt numbering",
+                subtitle = "Auto-generate sequential receipt IDs (e.g. LIC-2026-089)",
                 checked = isAutoReceipt,
                 onCheckedChange = onAutoReceiptChange
             )
@@ -1592,9 +1945,6 @@ fun ReceiptSettingsSection(
     }
 }
 
-/**
- * 5. BACKUP SETTINGS SECTION
- */
 @Composable
 fun BackupSettingsSection(
     isAutoBackup: Boolean,
@@ -1605,98 +1955,60 @@ fun BackupSettingsSection(
     onBackupNowClick: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("backup_settings_section")
+            .testTag("settings_backup_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            SectionHeader(icon = Icons.Default.CloudSync, title = "Cloud Sync & Backup")
+
+            SwitchSettingRow(
+                title = "Auto Backup",
+                subtitle = "Schedule daily background backups of Room database",
+                checked = isAutoBackup,
+                onCheckedChange = onAutoBackupChange
+            )
+
+            SwitchSettingRow(
+                title = "Real-time Firebase Cloud Sync",
+                subtitle = "Instant synchronization across logged-in agent devices",
+                checked = isCloudSync,
+                onCheckedChange = onCloudSyncChange
+            )
+
+            HorizontalDivider(color = CardBorder, thickness = 1.dp)
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "BACKUP SETTINGS",
-                    color = RoyalBlueGlow,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.5.sp,
-                    letterSpacing = 1.sp
-                )
+                Column {
+                    Text("Last Backup Status", color = TextMuted, fontSize = 12.sp)
+                    Text(lastBackupText, color = AccentGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
 
-                Surface(
-                    color = AccentGreen.copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(8.dp)
+                Button(
+                    onClick = onBackupNowClick,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBlueLight),
+                    modifier = Modifier.testTag("backup_now_button")
                 ) {
-                    Text(
-                        text = "Encrypted Vault",
-                        color = AccentGreen,
-                        fontSize = 10.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Backup Now", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                 }
             }
-
-            // Backup Info Row
-            Surface(
-                color = DarkBg,
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, CardBorder)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text("Last Backup Status", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                        Text(lastBackupText, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                    }
-
-                    Button(
-                        onClick = onBackupNowClick,
-                        colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Backup", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Autorenew,
-                title = "Auto Backup",
-                subtitle = "Daily background cloud snapshots",
-                checked = isAutoBackup,
-                onCheckedChange = onAutoBackupChange
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.CloudSync,
-                title = "Cloud Sync",
-                subtitle = "Real-time sync across registered agent devices",
-                checked = isCloudSync,
-                onCheckedChange = onCloudSyncChange
-            )
         }
     }
 }
 
-/**
- * 6. SECURITY SECTION
- */
 @Composable
 fun SecuritySettingsSection(
     isAppLock: Boolean,
@@ -1712,149 +2024,71 @@ fun SecuritySettingsSection(
     onAutoLockTimeChange: (String) -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("security_settings_section")
+            .testTag("settings_security_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "SECURITY & ACCESS",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.Security, title = "Security & App Lock")
 
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Lock,
-                title = "App Lock",
-                subtitle = "Require authentication to open app",
+            SwitchSettingRow(
+                title = "App Protection Master Lock",
+                subtitle = "Require security authentication to access client records",
                 checked = isAppLock,
                 onCheckedChange = onAppLockChange
             )
 
-            HorizontalDivider(color = CardBorder)
+            if (isAppLock) {
+                HorizontalDivider(color = CardBorder, thickness = 1.dp)
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Pin, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text("PIN Lock", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
-                        Text("4-Digit Passcode Protection", color = TextMuted, fontSize = 11.5.sp)
-                    }
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = onSetPinClick) {
-                        Text("Set PIN", color = RoyalBlueGlow, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                    Switch(
-                        checked = isPinLock,
-                        onCheckedChange = onPinLockChange,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = TextWhite,
-                            checkedTrackColor = RoyalBlueLight,
-                            uncheckedThumbColor = TextMuted,
-                            uncheckedTrackColor = DarkBg
-                        )
-                    )
-                }
-            }
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsSwitchRowItem(
-                icon = Icons.Default.Fingerprint,
-                title = "Fingerprint",
-                subtitle = "Biometric sensor authentication",
-                checked = isFingerprint,
-                onCheckedChange = onFingerprintChange
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            // Face Unlock Placeholder
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(Icons.Default.Face, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Face Unlock", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
-                            Surface(color = AccentAmber.copy(alpha = 0.2f), shape = RoundedCornerShape(6.dp)) {
-                                Text("Experimental", color = AccentAmber, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
-                            }
-                        }
-                        Text("Facial recognition login", color = TextMuted, fontSize = 11.5.sp)
-                    }
-                }
-
-                Switch(
-                    checked = isFaceUnlock,
-                    onCheckedChange = onFaceUnlockChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = TextWhite,
-                        checkedTrackColor = RoyalBlueLight,
-                        uncheckedThumbColor = TextMuted,
-                        uncheckedTrackColor = DarkBg
-                    )
-                )
-            }
-
-            HorizontalDivider(color = CardBorder)
-
-            // Auto Lock Duration Chips
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Auto Lock Duration", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf("Immediate", "1 Min", "5 Min", "15 Min").forEach { duration ->
-                        val isSelected = selectedAutoLockTime == duration
-                        Surface(
-                            onClick = { onAutoLockTimeChange(duration) },
-                            color = if (isSelected) RoyalBlueLight else DarkBg,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text(
-                                text = duration,
-                                color = TextWhite,
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(vertical = 8.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("4-Digit Passcode PIN", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                        Text("Numeric PIN authentication", color = TextMuted, fontSize = 12.sp)
+                    }
+
+                    OutlinedButton(
+                        onClick = onSetPinClick,
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, RoyalBlueGlow),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RoyalBlueGlow),
+                        modifier = Modifier.testTag("set_pin_button")
+                    ) {
+                        Text(if (isPinLock) "Manage PIN" else "Set PIN", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                SwitchSettingRow(
+                    title = "Biometric Fingerprint Unlock",
+                    subtitle = "Use Android Hardware Biometric Prompt",
+                    checked = isFingerprint,
+                    onCheckedChange = onFingerprintChange
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Auto Lock Delay", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Immediate", "1 Min", "5 Min", "15 Min").forEach { time ->
+                            FilterChip(
+                                selected = selectedAutoLockTime == time,
+                                onClick = { onAutoLockTimeChange(time) },
+                                label = { Text(time, fontSize = 12.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = RoyalBlueLight,
+                                    selectedLabelColor = TextWhite,
+                                    containerColor = Color(0xFF0F172A),
+                                    labelColor = TextMuted
+                                )
                             )
                         }
                     }
@@ -1864,9 +2098,6 @@ fun SecuritySettingsSection(
     }
 }
 
-/**
- * 7. DATA MANAGEMENT SECTION
- */
 @Composable
 fun DataManagementSection(
     storageUsedMb: Float,
@@ -1875,44 +2106,28 @@ fun DataManagementSection(
     onResetDemoClick: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("data_management_section")
+            .testTag("settings_data_management_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "DATA MANAGEMENT",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.Storage, title = "Data Management & Storage")
 
-            // Storage Usage Display
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Storage Usage", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                    Text("${storageUsedMb} MB / 1.0 GB", color = TextMuted, fontSize = 12.sp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text("Local Room Storage", color = TextMuted, fontSize = 12.sp)
+                    Text("${storageUsedMb} MB occupied", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 }
-
-                LinearProgressIndicator(
-                    progress = { storageUsedMb / 1024f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = RoyalBlueGlow,
-                    trackColor = DarkBg
-                )
             }
 
             Row(
@@ -1921,56 +2136,42 @@ fun DataManagementSection(
             ) {
                 OutlinedButton(
                     onClick = onExportDataClick,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("export_data_button"),
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, CardBorder)
+                    border = BorderStroke(1.dp, RoyalBlueGlow)
                 ) {
-                    Icon(Icons.Default.IosShare, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp), tint = RoyalBlueGlow)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Export Data", color = TextWhite, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    Text("Export Dataset", color = TextWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
 
                 OutlinedButton(
                     onClick = onImportDataClick,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).testTag("import_data_button"),
                     shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, CardBorder)
+                    border = BorderStroke(1.dp, AccentGreen)
                 ) {
-                    Icon(Icons.Default.FileDownload, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp), tint = AccentGreen)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Import Data", color = TextWhite, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    Text("Import Backup", color = TextWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
-            HorizontalDivider(color = CardBorder)
-
-            Surface(
+            OutlinedButton(
                 onClick = onResetDemoClick,
-                color = DarkBg,
+                modifier = Modifier.fillMaxWidth().testTag("reset_demo_button"),
                 shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, CardBorder),
-                modifier = Modifier.fillMaxWidth()
+                border = BorderStroke(1.dp, AccentAmber),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentAmber)
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.RestartAlt, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("Reset Demo Data", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
-                        Text("Re-populate demo clients and sample policies", color = TextMuted, fontSize = 11.5.sp)
-                    }
-                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
-                }
+                Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Reset Demo Data Environment", fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
 }
 
-/**
- * 8. SUPPORT SECTION
- */
 @Composable
 fun SupportSection(
     onHelpCenterClick: () -> Unit,
@@ -1982,126 +2183,80 @@ fun SupportSection(
     onAboutClick: () -> Unit
 ) {
     Card(
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = CardBg),
-        border = BorderStroke(1.dp, CardBorder),
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("support_section")
+            .testTag("settings_support_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
     ) {
         Column(
             modifier = Modifier.padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(
-                text = "SUPPORT & ABOUT",
-                color = RoyalBlueGlow,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.5.sp,
-                letterSpacing = 1.sp
-            )
+            SectionHeader(icon = Icons.Default.SupportAgent, title = "Support & Legal")
 
-            SettingsClickableRowItem(
-                icon = Icons.AutoMirrored.Filled.HelpOutline,
-                title = "Help Center",
-                subtitle = "FAQs and agent usage guidelines",
-                onClick = onHelpCenterClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.HeadsetMic,
-                title = "Contact Support",
-                subtitle = "Dedicated helpline & email support",
-                onClick = onContactSupportClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.Feedback,
-                title = "Feedback",
-                subtitle = "Submit feature proposals or bug reports",
-                onClick = onFeedbackClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.PrivacyTip,
-                title = "Privacy Policy",
-                subtitle = "Data security and privacy commitments",
-                onClick = onPrivacyPolicyClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.Description,
-                title = "Terms & Conditions",
-                subtitle = "Software terms of service agreement",
-                onClick = onTermsClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.Star,
-                title = "Rate App",
-                subtitle = "Rate us 5-stars on Google Play Store",
-                onClick = onRateAppClick
-            )
-
-            HorizontalDivider(color = CardBorder)
-
-            SettingsClickableRowItem(
-                icon = Icons.Default.Info,
-                title = "About",
-                subtitle = "LIC Premium Reminder Pro v2.5.0 (Build 2026)",
-                onClick = onAboutClick
-            )
+            SupportActionRow(title = "Help Center & FAQs", icon = Icons.AutoMirrored.Filled.HelpOutline, onClick = onHelpCenterClick)
+            SupportActionRow(title = "Contact Support Team", icon = Icons.Default.HeadsetMic, onClick = onContactSupportClick)
+            SupportActionRow(title = "Send Agent Feedback", icon = Icons.Default.Feedback, onClick = onFeedbackClick)
+            SupportActionRow(title = "Privacy Policy", icon = Icons.Default.PrivacyTip, onClick = onPrivacyPolicyClick)
+            SupportActionRow(title = "Terms & Conditions", icon = Icons.Default.Gavel, onClick = onTermsClick)
+            SupportActionRow(title = "Rate App on Play Store", icon = Icons.Default.Star, onClick = onRateAppClick)
+            SupportActionRow(title = "About LIC Reminder Pro", icon = Icons.Default.Info, onClick = onAboutClick)
         }
     }
 }
 
-// ===========================================================================
-// HELPER COMPOSABLE ITEMS
-// ===========================================================================
+@Composable
+fun SupportActionRow(
+    title: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(imageVector = icon, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(text = title, color = TextWhite, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
+        }
+        Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+    }
+}
 
 @Composable
-fun SettingsSwitchRowItem(
-    icon: ImageVector,
+fun SectionHeader(icon: ImageVector, title: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(imageVector = icon, contentDescription = null, tint = RoyalBlueGlow, modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text = title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.5.sp)
+    }
+}
+
+@Composable
+fun SwitchSettingRow(
     title: String,
     subtitle: String,
     checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    tag: String = ""
+    onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column {
-                Text(text = title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
-                Text(text = subtitle, color = TextMuted, fontSize = 11.5.sp)
-            }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = title, color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(text = subtitle, color = TextMuted, fontSize = 11.5.sp)
         }
-
+        Spacer(modifier = Modifier.width(12.dp))
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
@@ -2109,46 +2264,13 @@ fun SettingsSwitchRowItem(
                 checkedThumbColor = TextWhite,
                 checkedTrackColor = RoyalBlueLight,
                 uncheckedThumbColor = TextMuted,
-                uncheckedTrackColor = DarkBg
-            ),
-            modifier = if (tag.isNotBlank()) Modifier.testTag(tag) else Modifier
+                uncheckedTrackColor = Color(0xFF0F172A)
+            )
         )
     }
 }
 
-@Composable
-fun SettingsClickableRowItem(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        color = Color.Transparent
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .background(RoyalBluePrimary.copy(alpha = 0.2f), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(imageVector = icon, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(20.dp))
-            }
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 14.5.sp)
-                Text(text = subtitle, color = TextMuted, fontSize = 11.5.sp)
-            }
-            Icon(imageVector = Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
-        }
-    }
-}
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SearchBranchDialog(
     currentCode: String,
@@ -2156,14 +2278,15 @@ fun SearchBranchDialog(
     onDismiss: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    val branches = remember { LicBranchMaster.defaultBranches }
     val filteredBranches = remember(searchQuery) {
         if (searchQuery.isBlank()) {
-            LicBranchMaster.defaultBranches
+            branches
         } else {
-            LicBranchMaster.defaultBranches.filter { branch ->
-                branch.code.contains(searchQuery, ignoreCase = true) ||
-                branch.name.contains(searchQuery, ignoreCase = true) ||
-                branch.city.contains(searchQuery, ignoreCase = true)
+            branches.filter {
+                it.code.contains(searchQuery, ignoreCase = true) ||
+                        it.name.contains(searchQuery, ignoreCase = true) ||
+                        it.city.contains(searchQuery, ignoreCase = true)
             }
         }
     }
@@ -2172,170 +2295,290 @@ fun SearchBranchDialog(
         onDismissRequest = onDismiss,
         containerColor = CardBg,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = null,
-                    tint = RoyalBlueLight
-                )
-                Text(
-                    text = "Search LIC Branch Master",
-                    color = TextWhite,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Select LIC Branch", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search code, city or branch name...", color = TextMuted, fontSize = 13.sp) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted) },
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
+                    modifier = Modifier.fillMaxWidth().testTag("branch_search_input")
                 )
             }
         },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search by Code or Name (e.g. 02A, Balasore)...", color = TextMuted, fontSize = 13.sp) },
-                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
-                            }
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextWhite,
-                        unfocusedTextColor = TextWhite,
-                        focusedBorderColor = RoyalBlueLight,
-                        unfocusedBorderColor = CardBorder
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("search_branch_input_field")
-                )
-
-                Text(
-                    text = "Tap a branch to select code & auto-fill branch name:",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f, fill = false)
-                ) {
-                    items(filteredBranches) { branch ->
-                        val isSelected = currentCode.equals(branch.code, ignoreCase = true)
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected) RoyalBluePrimary.copy(alpha = 0.5f) else Color(0xFF0F172A)
-                            ),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) AccentOrange else CardBorder
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onBranchSelected(branch) }
-                                .testTag("branch_option_${branch.code}")
-                        ) {
-                            Row(
+            Box(modifier = Modifier.height(300.dp)) {
+                if (filteredBranches.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("No branches found matching '$searchQuery'", color = TextMuted, fontSize = 13.sp)
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredBranches) { branch ->
+                            val isSelected = branch.code.equals(currentCode, ignoreCase = true)
+                            Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    .clickable { onBranchSelected(branch) },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) RoyalBluePrimary else Color(0xFF0F172A)
+                                ),
+                                border = BorderStroke(1.dp, if (isSelected) RoyalBlueGlow else CardBorder)
                             ) {
-                                Box(
+                                Row(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(if (isSelected) AccentOrange else RoyalBlueLight)
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                    contentAlignment = Alignment.Center
+                                        .padding(12.dp)
+                                        .fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = branch.code,
-                                        style = TextStyle(
-                                            color = TextWhite,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp
-                                        )
-                                    )
-                                }
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = branch.name,
-                                        color = TextWhite,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize = 14.sp
-                                    )
-                                    if (branch.city.isNotBlank()) {
-                                        Text(
-                                            text = "Division / City: ${branch.city}",
-                                            color = TextMuted,
-                                            fontSize = 11.5.sp
-                                        )
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(text = "${branch.code} • ${branch.name}", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                                        if (branch.city.isNotBlank()) {
+                                            Text(text = "City: ${branch.city}", color = TextMuted, fontSize = 11.5.sp)
+                                        }
+                                    }
+                                    if (isSelected) {
+                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(20.dp))
                                     }
                                 }
-
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Selected",
-                                        tint = AccentOrange,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    if (filteredBranches.isEmpty()) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "No branch found matching \"$searchQuery\"",
-                                    color = TextMuted,
-                                    fontSize = 13.sp,
-                                    textAlign = TextAlign.Center
-                                )
                             }
                         }
                     }
                 }
             }
         },
-        confirmButton = {},
-        dismissButton = {
+        confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextMuted)
+                Text("Close", color = TextMuted)
             }
         }
     )
 }
 
-// ===========================================================================
-// PREVIEW
-// ===========================================================================
-@Preview(showBackground = true, backgroundColor = 0xFF0F172A)
 @Composable
-fun SettingsScreenPreview() {
-    SettingsScreen(
-        viewModel = null,
-        onBackClick = {},
-        onLogout = {}
+fun PaymentSettingsSection(
+    accountHolderName: String,
+    onAccountHolderNameChange: (String) -> Unit,
+    upiVpaId: String,
+    onUpiVpaIdChange: (String) -> Unit,
+    upiIdError: String?,
+    onSaveClick: () -> Unit,
+    onTestQrClick: () -> Unit,
+    onResetClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_payment_card"),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CardBg),
+        border = BorderStroke(1.dp, CardBorder)
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            SectionHeader(icon = Icons.Default.AccountBalanceWallet, title = "Payment & UPI QR Settings")
+
+            Text(
+                text = "Set up your Account Holder Name and UPI ID for generating instant UPI payment links and QR codes.",
+                style = MaterialTheme.typography.bodySmall.copy(color = TextMuted, fontSize = 12.5.sp)
+            )
+
+            OutlinedTextField(
+                value = accountHolderName,
+                onValueChange = onAccountHolderNameChange,
+                label = { Text("Account Holder Name") },
+                leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, tint = RoyalBlueGlow) },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("payment_account_holder_input"),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = RoyalBlueGlow,
+                    unfocusedBorderColor = CardBorder,
+                    focusedLabelColor = RoyalBlueGlow
+                )
+            )
+
+            OutlinedTextField(
+                value = upiVpaId,
+                onValueChange = onUpiVpaIdChange,
+                label = { Text("UPI ID / VPA") },
+                placeholder = { Text("e.g. name@oksbi, name@ybl, name@ibl") },
+                leadingIcon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null, tint = AccentAmber) },
+                supportingText = {
+                    Text(
+                        text = upiIdError ?: "Example formats: name@oksbi, name@ybl, name@ibl, name@okaxis",
+                        color = if (upiIdError != null) AccentRed else TextMuted,
+                        fontSize = 11.sp
+                    )
+                },
+                isError = upiIdError != null,
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("payment_upi_id_input"),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = RoyalBlueGlow,
+                    unfocusedBorderColor = CardBorder,
+                    focusedLabelColor = RoyalBlueGlow
+                )
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Save Button
+                Button(
+                    onClick = onSaveClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("payment_save_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Save", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                // Test QR Button
+                OutlinedButton(
+                    onClick = onTestQrClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("payment_test_qr_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, AccentAmber),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentAmber)
+                ) {
+                    Icon(Icons.Default.QrCode, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Test QR", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                // Reset Button
+                OutlinedButton(
+                    onClick = onResetClick,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("payment_reset_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CardBorder),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextMuted)
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Reset", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TestQrModalDialog(
+    accountHolderName: String,
+    upiVpaId: String,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val testAmount = "1"
+    val encodedName = Uri.encode(accountHolderName)
+    val testUri = "upi://pay?pa=$upiVpaId&pn=$encodedName&am=$testAmount&tn=LIC%20Test%20Payment&cu=INR"
+    val testQrBitmap = remember(accountHolderName, upiVpaId) {
+        com.example.util.QrCodeGenerator.generateQrBitmap(testUri, size = 420)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary)
+            ) {
+                Text("Close Test Preview")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(testUri))
+                    try {
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "No UPI app installed, URI copied instead", Toast.LENGTH_SHORT).show()
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("UPI URI", testUri))
+                    }
+                }
+            ) {
+                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Open UPI App")
+            }
+        },
+        shape = RoundedCornerShape(24.dp),
+        containerColor = Color(0xFF1E293B),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = AccentGreen)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Test UPI QR Verification", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = TextWhite))
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Generated ₹1 Test Payment QR Code",
+                    style = androidx.compose.ui.text.TextStyle(color = TextMuted, fontSize = 12.sp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .size(180.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White)
+                        .padding(12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (testQrBitmap != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = testQrBitmap.asImageBitmap(),
+                            contentDescription = "Test QR Code",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        CircularProgressIndicator(color = RoyalBluePrimary)
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Color(0xFF0F172A)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp).fillMaxWidth()) {
+                        Text("Account: $accountHolderName", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = TextWhite)
+                        Text("UPI ID: $upiVpaId", color = AccentAmber, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("URI: $testUri", fontSize = 10.sp, color = TextMuted)
+                    }
+                }
+            }
+        }
     )
 }

@@ -6,6 +6,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.example.data.local.AppDatabase
 import com.example.data.remote.FirebaseSyncManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -139,7 +140,10 @@ class ReminderWorker(
 
             Log.i(TAG, "ReminderWorker completed successfully. $notificationsSentCount notifications dispatched.")
             Result.success()
-        } catch (e: Throwable) {
+        } catch (e: CancellationException) {
+            Log.i(TAG, "ReminderWorker job cancelled.")
+            throw e
+        } catch (e: Exception) {
             Log.e(TAG, "ReminderWorker failed with error: ${e.localizedMessage}", e)
             Result.retry()
         }

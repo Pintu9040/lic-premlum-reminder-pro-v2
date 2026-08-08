@@ -82,19 +82,20 @@ fun BackupRestoreScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     // Backup & Restore State Controls
     var isBackingUp by remember { mutableStateOf(false) }
     var isRestoring by remember { mutableStateOf(false) }
     var syncProgress by remember { mutableFloatStateOf(0f) }
     var cloudConnected by remember { mutableStateOf(true) }
-    var lastBackupDate by remember { mutableStateOf("04 Aug 2026, 05:30 PM") }
-    var lastBackupSize by remember { mutableStateOf("14.2 MB") }
+    var lastBackupDate by remember { mutableStateOf("No backup yet") }
+    var lastBackupSize by remember { mutableStateOf("0 MB") }
 
     // Stats Counters
-    var totalCustomers by remember { mutableIntStateOf(142) }
-    var totalPolicies by remember { mutableIntStateOf(285) }
-    var totalDocuments by remember { mutableIntStateOf(94) }
+    var totalCustomers by remember { mutableIntStateOf(0) }
+    var totalPolicies by remember { mutableIntStateOf(0) }
+    var totalDocuments by remember { mutableIntStateOf(0) }
 
     // Auto Backup Settings
     var autoBackupEnabled by remember { mutableStateOf(true) }
@@ -117,59 +118,93 @@ fun BackupRestoreScreen(
 
     // Backup History List
     var historyList by remember {
-        mutableStateOf(
-            listOf(
-                DetailedBackupHistoryItem("1", "04 Aug 2026", "05:30 PM", "14.2 MB", "12 sec", "Success", "Firebase Cloud"),
-                DetailedBackupHistoryItem("2", "03 Aug 2026", "08:15 AM", "14.0 MB", "10 sec", "Success", "Local Device"),
-                DetailedBackupHistoryItem("3", "01 Aug 2026", "11:45 PM", "13.8 MB", "14 sec", "Success", "Firebase Cloud"),
-                DetailedBackupHistoryItem("4", "25 Jul 2026", "06:00 PM", "13.5 MB", "Failed", "Failed (Network)", "Google Drive"),
-                DetailedBackupHistoryItem("5", "18 Jul 2026", "09:20 AM", "12.9 MB", "8 sec", "Success", "Local Device")
-            )
-        )
+        mutableStateOf<List<DetailedBackupHistoryItem>>(emptyList())
     }
 
-    // Function to trigger simulated animated backup process
+    fun loadRealData() {
+        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val db = com.example.data.local.AppDatabase.getDatabase(context)
+            val cCount = try { db.customerDao().getAllCustomersSync().size } catch (e: Throwable) { 0 }
+            val pCount = try { db.policyDao().getAllPoliciesSync().size } catch (e: Throwable) { 0 }
+            val dCount = try { db.documentDao().getAllDocumentsSync().size } catch (e: Throwable) { 0 }
+
+            totalCustomers = cCount
+            totalPolicies = pCount
+            totalDocuments = dCount
+
+            val localHistory = com.example.data.backup.BackupManager.getLocalHistory(context)
+            if (localHistory.isNotEmpty()) {
+                val latest = localHistory.first()
+                lastBackupDate = "${latest.date}, ${latest.time}"
+                lastBackupSize = latest.size
+
+                historyList = localHistory.map { item ->
+                    DetailedBackupHistoryItem(
+                        id = item.id,
+                        date = item.date,
+                        time = item.time,
+                        size = item.size,
+                        duration = item.duration,
+                        status = item.status,
+                        destination = item.destination
+                    )
+                }
+            } else {
+                lastBackupDate = "Not backed up yet"
+                lastBackupSize = "0 KB"
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loadRealData()
+    }
+
+    // Function to trigger production full backup process
     fun triggerBackupNow() {
         if (isBackingUp || isRestoring) return
         coroutineScope.launch {
             isBackingUp = true
-            syncProgress = 0f
-            for (p in 1..100) {
-                delay(20)
-                syncProgress = p / 100f
+            syncProgress = 0.05f
+            val db = com.example.data.local.AppDatabase.getDatabase(context)
+            val res = com.example.data.backup.BackupManager.createFullBackup(context, db) { p ->
+                syncProgress = p
             }
-            delay(150)
-            isBackingUp = false
-            lastBackupDate = "Just now"
-            lastBackupSize = "14.3 MB"
-            cloudConnected = true
-            val newItem = DetailedBackupHistoryItem(
-                id = System.currentTimeMillis().toString(),
-                date = "04 Aug 2026",
-                time = "Just now",
-                size = "14.3 MB",
-                duration = "11 sec",
-                status = "Success",
-                destination = "Firebase Cloud"
-            )
-            historyList = listOf(newItem) + historyList.take(4)
-            snackbarHostState.showSnackbar("Backup created & synced safely!")
+            res.onSuccess { item ->
+                isBackingUp = false
+                lastBackupDate = "${item.date}, ${item.time}"
+                lastBackupSize = item.size
+                cloudConnected = true
+                loadRealData()
+                snackbarHostState.showSnackbar("Backup package created & saved successfully! (${item.size})")
+            }.onFailure { err ->
+                isBackingUp = false
+                snackbarHostState.showSnackbar("Backup failed: ${err.message}")
+            }
         }
     }
 
-    // Function to trigger simulated restore process
+    // Function to trigger production restore process
     fun triggerRestoreNow() {
         if (isRestoring || isBackingUp) return
         coroutineScope.launch {
             isRestoring = true
-            syncProgress = 0f
-            for (p in 1..100) {
-                delay(22)
-                syncProgress = p / 100f
+            syncProgress = 0.05f
+            val db = com.example.data.local.AppDatabase.getDatabase(context)
+            val localHistory = com.example.data.backup.BackupManager.getLocalHistory(context)
+            val backupItem = localHistory.firstOrNull() ?: com.example.data.backup.BackupHistoryItemData(id = "none")
+
+            val res = com.example.data.backup.BackupManager.restoreBackup(context, db, backupItem, replaceExisting = true) { p ->
+                syncProgress = p
             }
-            delay(150)
-            isRestoring = false
-            snackbarHostState.showSnackbar("Database & assets restored successfully!")
+            res.onSuccess { msg ->
+                isRestoring = false
+                loadRealData()
+                snackbarHostState.showSnackbar(msg)
+            }.onFailure { err ->
+                isRestoring = false
+                snackbarHostState.showSnackbar("Restore failed: ${err.message}")
+            }
         }
     }
 
@@ -384,11 +419,28 @@ fun BackupRestoreScreen(
             // AUTO BACKUP SECTION (Switch, Frequency, Wi-Fi, Include Docs, Next Scheduled)
             AutoBackupDetailedSection(
                 enabled = autoBackupEnabled,
-                onEnabledChange = { autoBackupEnabled = it },
+                onEnabledChange = { enabled ->
+                    autoBackupEnabled = enabled
+                    if (enabled) {
+                        com.example.data.backup.BackupManager.scheduleAutoBackupWork(context, selectedFrequency.label, wifiOnlyEnabled, false)
+                    } else {
+                        com.example.data.backup.BackupManager.cancelAutoBackupWork(context)
+                    }
+                },
                 frequency = selectedFrequency,
-                onFrequencyChange = { selectedFrequency = it },
+                onFrequencyChange = { freq ->
+                    selectedFrequency = freq
+                    if (autoBackupEnabled) {
+                        com.example.data.backup.BackupManager.scheduleAutoBackupWork(context, freq.label, wifiOnlyEnabled, false)
+                    }
+                },
                 wifiOnly = wifiOnlyEnabled,
-                onWifiOnlyChange = { wifiOnlyEnabled = it },
+                onWifiOnlyChange = { wifi ->
+                    wifiOnlyEnabled = wifi
+                    if (autoBackupEnabled) {
+                        com.example.data.backup.BackupManager.scheduleAutoBackupWork(context, selectedFrequency.label, wifi, false)
+                    }
+                },
                 includeDocs = includeDocsEnabled,
                 onIncludeDocsChange = { includeDocsEnabled = it }
             )
@@ -504,7 +556,7 @@ fun BackupRestoreScreen(
                     Surface(
                         onClick = {
                             showExportDialog = false
-                            coroutineScope.launch { snackbarHostState.showSnackbar("Encrypted JSON exported to Downloads folder") }
+                            triggerBackupNow()
                         },
                         color = DarkBg,
                         shape = RoundedCornerShape(12.dp),

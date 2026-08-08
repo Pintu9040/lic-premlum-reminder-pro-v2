@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,8 +62,10 @@ data class CustomerReportItem(
 @Composable
 fun ReminderReportScreen(
     onBackClick: () -> Unit = {},
-    onExportClick: () -> Unit = {}
+    onExportClick: (() -> Unit)? = null
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") } // "All", "Sent", "Failed"
     var expandedCardId by remember { mutableStateOf<Int?>(null) }
@@ -278,7 +281,26 @@ fun ReminderReportScreen(
                         .padding(16.dp)
                 ) {
                     Button(
-                        onClick = onExportClick,
+                        onClick = {
+                            if (onExportClick != null) {
+                                onExportClick()
+                            } else {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Generating PDF Report...")
+                                    val reportData = com.example.pdf.PdfReportData(
+                                        reportType = com.example.pdf.ReportType.OUTSTANDING_PREMIUM,
+                                        filterPeriod = selectedFilter
+                                    )
+                                    val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                    res.onSuccess { file ->
+                                        snackbarHostState.showSnackbar("PDF Report Saved: ${file.name}")
+                                        com.example.pdf.PdfReportGenerator.openPdf(context, file)
+                                    }.onFailure { err ->
+                                        snackbarHostState.showSnackbar("Failed: ${err.message}")
+                                    }
+                                }
+                            }
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(56.dp)

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +23,8 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +47,8 @@ import com.example.ui.PaymentDateFilter
 import com.example.ui.PaymentModeFilter
 import com.example.ui.components.*
 import com.example.ui.theme.*
+import com.example.util.NoMatchingRecordsEmptyState
+import com.example.util.SearchFilterEngine
 import java.net.URLEncoder
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -110,13 +115,13 @@ fun PaymentHistoryScreen(
     val searchQuery by viewModel.paymentSearchQuery.collectAsState()
     val selectedModeFilter by viewModel.paymentModeFilter.collectAsState()
 
-    // Dashboard state controls
+    // Date filter state: ALL, TODAY, THIS_MONTH, PENDING, CUSTOM_DATE
     var activeDateFilter by remember { mutableStateOf(PaymentDashboardDateFilter.ALL) }
     var customStartDate by remember { mutableStateOf<LocalDate?>(null) }
     var customEndDate by remember { mutableStateOf<LocalDate?>(null) }
     var showCustomDateDialog by remember { mutableStateOf(false) }
 
-    var isSearchExpanded by remember { mutableStateOf(false) }
+    var isSearchExpanded by remember { mutableStateOf(true) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -126,6 +131,16 @@ fun PaymentHistoryScreen(
     var deletingPayment by remember { mutableStateOf<PaymentEntity?>(null) }
     var showRecordPaymentDialog by remember { mutableStateOf(false) }
     var targetPolicyForCollection by remember { mutableStateOf<PolicyEntity?>(null) }
+    var selectedCustomerForHistory by remember { mutableStateOf<CustomerEntity?>(null) }
+
+    if (selectedCustomerForHistory != null) {
+        CustomerPaymentHistoryScreen(
+            customer = selectedCustomerForHistory!!,
+            viewModel = viewModel,
+            onBack = { selectedCustomerForHistory = null }
+        )
+        return
+    }
 
     val context = LocalContext.current
     val todayDateFormatted = remember {
@@ -136,7 +151,7 @@ fun PaymentHistoryScreen(
         }
     }
 
-    // Filter payments locally based on date filter + customer search (Name, Policy Number, Mobile)
+    // Filter payments based on date, search query, mode, and pending status
     val filteredPayments = remember(
         allPayments,
         allCustomers,
@@ -148,17 +163,17 @@ fun PaymentHistoryScreen(
         customEndDate
     ) {
         val today = LocalDate.now()
-        val yesterday = today.minusDays(1)
-        val startOfWeek = today.minusDays(today.dayOfWeek.value.toLong() - 1)
         val currentMonth = today.monthValue
         val currentYear = today.year
 
         allPayments.filter { payment ->
             val matchingCust = allCustomers.find { it.id == payment.customerId }
+            val matchingPol = allPolicies.find { it.id == payment.policyId }
             val custMobile = matchingCust?.mobile ?: ""
             val custWhatsapp = matchingCust?.whatsapp ?: ""
+            val remainingBal = getRemainingBalanceForPayment(payment, matchingPol, allPayments)
 
-            // Search by Name, Policy Number, or Mobile Number
+            // Search by Name, Policy Number, Mobile Number, or Receipt Number
             val matchesQuery = searchQuery.isBlank() ||
                     payment.customerName.contains(searchQuery, ignoreCase = true) ||
                     payment.policyNumber.contains(searchQuery, ignoreCase = true) ||
@@ -169,11 +184,9 @@ fun PaymentHistoryScreen(
 
             val pDate = try { LocalDate.parse(payment.paymentDate) } catch (e: Exception) { null }
 
-            val matchesDate = when (activeDateFilter) {
+            val matchesFilter = when (activeDateFilter) {
                 PaymentDashboardDateFilter.ALL -> true
                 PaymentDashboardDateFilter.TODAY -> pDate?.isEqual(today) == true
-                PaymentDashboardDateFilter.YESTERDAY -> pDate?.isEqual(yesterday) == true
-                PaymentDashboardDateFilter.THIS_WEEK -> pDate != null && !pDate.isBefore(startOfWeek) && !pDate.isAfter(today)
                 PaymentDashboardDateFilter.THIS_MONTH -> pDate != null && pDate.monthValue == currentMonth && pDate.year == currentYear
                 PaymentDashboardDateFilter.CUSTOM_DATE -> {
                     if (customStartDate != null && customEndDate != null && pDate != null) {
@@ -181,6 +194,11 @@ fun PaymentHistoryScreen(
                     } else if (customStartDate != null && pDate != null) {
                         !pDate.isBefore(customStartDate)
                     } else true
+                }
+                PaymentDashboardDateFilter.YESTERDAY -> pDate?.isEqual(today.minusDays(1)) == true
+                PaymentDashboardDateFilter.THIS_WEEK -> {
+                    val startOfWeek = today.minusDays(today.dayOfWeek.value.toLong() - 1)
+                    pDate != null && !pDate.isBefore(startOfWeek) && !pDate.isAfter(today)
                 }
             }
 
@@ -190,151 +208,98 @@ fun PaymentHistoryScreen(
                 PaymentModeFilter.UPI -> payment.paymentMode.equals("UPI", ignoreCase = true)
                 PaymentModeFilter.BANK_TRANSFER -> payment.paymentMode.contains("Bank", ignoreCase = true) || payment.paymentMode.contains("Net", ignoreCase = true)
                 PaymentModeFilter.CHEQUE -> payment.paymentMode.equals("Cheque", ignoreCase = true)
+                PaymentModeFilter.ONLINE -> payment.paymentMode.contains("Online", ignoreCase = true) || payment.paymentMode.contains("Portal", ignoreCase = true)
             }
 
-            matchesQuery && matchesDate && matchesMode
+            matchesQuery && matchesFilter && matchesMode
         }.sortedByDescending { it.paymentDate }
     }
 
-    // Pending Collections Calculation
-    val pendingPoliciesCount = remember(allPolicies) {
-        val today = LocalDate.now()
-        allPolicies.count { pol ->
-            val due = try { LocalDate.parse(pol.dueDate) } catch (e: Exception) { null }
-            due != null && !due.isAfter(today.plusDays(30)) && pol.status.equals("Active", ignoreCase = true)
-        }
-    }
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Column {
-                            Text(
-                                text = "Payment Dashboard",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    fontSize = 20.sp
-                                )
-                            )
-                            Text(
-                                text = todayDateFormatted,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 12.sp
-                                )
-                            )
-                        }
-                    },
-                    navigationIcon = {
-                        if (onBack != null) {
-                            IconButton(onClick = onBack, modifier = Modifier.testTag("payment_dashboard_back")) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                            }
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = { isSearchExpanded = !isSearchExpanded }) {
-                            Icon(
-                                imageVector = if (isSearchExpanded) Icons.Default.SearchOff else Icons.Default.Search,
-                                contentDescription = "Search",
-                                tint = Color.White
-                            )
-                        }
-                        IconButton(onClick = { showCustomDateDialog = true }) {
-                            Icon(Icons.Default.FilterList, contentDescription = "Filter", tint = Color.White)
-                        }
-                        IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More Options", tint = Color.White)
-                        }
-
-                        DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Record Premium") },
-                                leadingIcon = { Icon(Icons.Default.AddCard, contentDescription = null) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    showRecordPaymentDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Sync Payments") },
-                                leadingIcon = { Icon(Icons.Default.Sync, contentDescription = null) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    viewModel.triggerSync()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Export Summary") },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    val summaryText = "LIC Payment Collection Summary ($todayDateFormatted)\n" +
-                                            "Today: ₹${"%.0f".format(stats.todayCollection)}\n" +
-                                            "Month: ₹${"%.0f".format(stats.monthlyCollection)}\n" +
-                                            "Outstanding: ₹${"%.0f".format(stats.outstandingAmount)}"
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        putExtra(Intent.EXTRA_TEXT, summaryText)
-                                        type = "text/plain"
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Share Payment Summary"))
-                                }
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = RoyalBluePrimary,
-                        titleContentColor = Color.White,
-                        navigationIconContentColor = Color.White,
-                        actionIconContentColor = Color.White
+            TopAppBar(
+                title = {
+                    Text(
+                        text = "Payment History",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            fontSize = 20.sp
+                        )
                     )
-                )
-
-                // Expandable Search Bar inside Top Section
-                AnimatedVisibility(
-                    visible = isSearchExpanded,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Surface(
-                        color = RoyalBluePrimary,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.setPaymentSearchQuery(it) },
-                            placeholder = { Text("Search customer name, policy #, or mobile...", color = Color.White.copy(alpha = 0.6f)) },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.White) },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.setPaymentSearchQuery("") }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear Search", tint = Color.White)
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color.White,
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.5f),
-                                cursorColor = Color.White
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .testTag("payment_dashboard_search_input"),
-                            shape = RoundedCornerShape(12.dp)
+                },
+                navigationIcon = {
+                    if (onBack != null) {
+                        IconButton(onClick = onBack, modifier = Modifier.testTag("payment_history_back")) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { isSearchExpanded = !isSearchExpanded }) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = Color.White
                         )
                     }
-                }
-            }
+                    IconButton(onClick = { showCustomDateDialog = true }) {
+                        Icon(Icons.Default.FilterList, contentDescription = "Filter Options", tint = Color.White)
+                    }
+                    IconButton(onClick = { showMoreMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More Options", tint = Color.White)
+                    }
+
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Add Payment") },
+                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            onClick = {
+                                showMoreMenu = false
+                                showRecordPaymentDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Sync Payments") },
+                            leadingIcon = { Icon(Icons.Default.Sync, contentDescription = null) },
+                            onClick = {
+                                showMoreMenu = false
+                                viewModel.triggerSync()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Export Summary") },
+                            leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                            onClick = {
+                                showMoreMenu = false
+                                val summaryText = "LIC Payment Collection Summary ($todayDateFormatted)\n" +
+                                        "Today: ₹${"%.0f".format(stats.todayCollection)}\n" +
+                                        "Month: ₹${"%.0f".format(stats.monthlyCollection)}\n" +
+                                        "Outstanding: ₹${"%.0f".format(stats.outstandingAmount)}"
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    putExtra(Intent.EXTRA_TEXT, summaryText)
+                                    type = "text/plain"
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Share Payment Summary"))
+                            }
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = RoyalBluePrimary,
+                    titleContentColor = Color.White,
+                    navigationIconContentColor = Color.White,
+                    actionIconContentColor = Color.White
+                )
+            )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
@@ -342,10 +307,10 @@ fun PaymentHistoryScreen(
                     targetPolicyForCollection = null
                     showRecordPaymentDialog = true
                 },
-                containerColor = AccentOrange,
+                containerColor = RoyalBluePrimary,
                 contentColor = Color.White,
-                icon = { Icon(Icons.Default.AddCard, contentDescription = "Collect Premium", modifier = Modifier.size(20.dp)) },
-                text = { Text("Collect Premium", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                icon = { Icon(Icons.Default.Add, contentDescription = "Add Payment", modifier = Modifier.size(20.dp)) },
+                text = { Text("Add Payment", fontWeight = FontWeight.Bold, fontSize = 14.sp) },
                 elevation = FloatingActionButtonDefaults.elevation(
                     defaultElevation = 6.dp,
                     pressedElevation = 12.dp,
@@ -353,209 +318,84 @@ fun PaymentHistoryScreen(
                     focusedElevation = 8.dp
                 ),
                 modifier = Modifier
-                    .padding(end = 16.dp, bottom = 58.dp)
-                    .shadow(elevation = 8.dp, shape = FloatingActionButtonDefaults.extendedFabShape, spotColor = AccentOrange.copy(alpha = 0.5f))
-                    .testTag("collect_premium_fab")
+                    .padding(end = 16.dp, bottom = 16.dp)
+                    .testTag("add_payment_fab")
             )
         }
     ) { innerPadding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                viewModel.refreshData { success, msg ->
+                    scope.launch {
+                        snackbarHostState.showSnackbar(msg)
+                    }
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background)
         ) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 140.dp)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
             ) {
-                // 1. SUMMARY CARDS SECTION (2x2 Grid)
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Text(
-                            text = "COLLECTION SUMMARY",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = RoyalBluePrimary,
-                                letterSpacing = 1.sp
-                            )
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                // STICKY SEARCH BAR BELOW APP BAR
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 2.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        AnimatedVisibility(
+                            visible = isSearchExpanded,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically()
                         ) {
-                            PaymentSummaryCard(
-                                title = "Today's Collection",
-                                value = "₹${"%.0f".format(stats.todayCollection)}",
-                                subtitle = "Today's total",
-                                icon = Icons.Default.Today,
-                                iconColor = EmeraldGreenSecondary,
-                                containerColor = EmeraldGreenContainer,
-                                modifier = Modifier.weight(1f)
-                            )
-                            PaymentSummaryCard(
-                                title = "This Month Collection",
-                                value = "₹${"%.0f".format(stats.monthlyCollection)}",
-                                subtitle = "Current month",
-                                icon = Icons.Default.CalendarMonth,
-                                iconColor = RoyalBluePrimary,
-                                containerColor = RoyalBlueContainer,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            PaymentSummaryCard(
-                                title = "Outstanding Amount",
-                                value = "₹${"%.0f".format(stats.outstandingAmount)}",
-                                subtitle = "Unpaid dues",
-                                icon = Icons.Default.WarningAmber,
-                                iconColor = ErrorRed,
-                                containerColor = ErrorRedContainer,
-                                modifier = Modifier.weight(1f)
-                            )
-                            PaymentSummaryCard(
-                                title = "Pending Collections",
-                                value = "$pendingPoliciesCount Policies",
-                                subtitle = "Due soon",
-                                icon = Icons.Default.PendingActions,
-                                iconColor = AccentOrange,
-                                containerColor = AccentOrangeContainer,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-
-                        // COLLECTION TARGET PROGRESS CARD
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .shadow(2.dp, RoundedCornerShape(16.dp)),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                val targetAmount = 100000.0
-                                val currentAmount = stats.monthlyCollection
-                                val progressFraction = (currentAmount / targetAmount).toFloat().coerceIn(0f, 1f)
-                                val percentFormatted = "%.0f".format(progressFraction * 100)
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.TrendingUp, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = "Monthly Collection Target",
-                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                        )
-                                    }
-                                    Text(
-                                        text = "$percentFormatted% Goal",
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
-                                    )
-                                }
-
-                                LinearProgressIndicator(
-                                    progress = { progressFraction },
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(10.dp)
-                                        .clip(RoundedCornerShape(5.dp)),
-                                    color = RoyalBluePrimary,
-                                    trackColor = RoyalBlueContainer
-                                )
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = "Achieved: ₹${"%.0f".format(currentAmount)}",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold, color = EmeraldGreenSecondary, fontSize = 11.sp)
-                                    )
-                                    Text(
-                                        text = "Target: ₹${"%.0f".format(targetAmount)}",
-                                        style = MaterialTheme.typography.labelSmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. SEARCH INPUT BAR (ALWAYS VISIBLE IF NOT EXPANDED IN TOP BAR)
-                if (!isSearchExpanded) {
-                    item {
-                        PaddingValues(horizontal = 16.dp, vertical = 4.dp)
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.setPaymentSearchQuery(it) },
-                            placeholder = { Text("Search customer name, policy #, or mobile...") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = RoyalBluePrimary) },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.setPaymentSearchQuery("") }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                                .testTag("payment_main_search_bar"),
-                            shape = RoundedCornerShape(14.dp)
-                        )
-                    }
-                }
-
-                // 3. FILTERS (DATE & PAYMENT MODE)
-                item {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 6.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Date Filter Chips
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(PaymentDashboardDateFilter.values()) { filter ->
-                                val label = when (filter) {
-                                    PaymentDashboardDateFilter.ALL -> "All"
-                                    PaymentDashboardDateFilter.TODAY -> "Today"
-                                    PaymentDashboardDateFilter.YESTERDAY -> "Yesterday"
-                                    PaymentDashboardDateFilter.THIS_WEEK -> "This Week"
-                                    PaymentDashboardDateFilter.THIS_MONTH -> "This Month"
-                                    PaymentDashboardDateFilter.CUSTOM_DATE -> if (customStartDate != null) "Custom Range" else "Custom Date"
-                                }
-                                FilterChip(
-                                    selected = activeDateFilter == filter,
-                                    onClick = {
-                                        if (filter == PaymentDashboardDateFilter.CUSTOM_DATE) {
-                                            showCustomDateDialog = true
-                                        } else {
-                                            activeDateFilter = filter
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { viewModel.setPaymentSearchQuery(it) },
+                                placeholder = { Text("Search by customer, mobile, or policy #...", fontSize = 14.sp) },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = RoyalBluePrimary) },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { viewModel.setPaymentSearchQuery("") }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Clear Search")
                                         }
-                                    },
+                                    }
+                                },
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = RoyalBluePrimary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .testTag("payment_history_sticky_search_input"),
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+
+                        // COMPACT FILTER CHIPS BELOW SEARCH BAR
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val chips = listOf(
+                                PaymentDashboardDateFilter.ALL to "All",
+                                PaymentDashboardDateFilter.TODAY to "Today",
+                                PaymentDashboardDateFilter.THIS_MONTH to "This Month"
+                            )
+
+                            chips.forEach { (filterOption, label) ->
+                                FilterChip(
+                                    selected = activeDateFilter == filterOption,
+                                    onClick = { activeDateFilter = filterOption },
                                     label = { Text(label, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold)) },
                                     shape = RoundedCornerShape(20.dp),
                                     colors = FilterChipDefaults.filterChipColors(
@@ -564,158 +404,170 @@ fun PaymentHistoryScreen(
                                     )
                                 )
                             }
-                        }
 
-                        // Payment Mode Chips
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(PaymentModeFilter.values()) { mode ->
-                                val label = when (mode) {
-                                    PaymentModeFilter.ALL -> "All Modes"
-                                    PaymentModeFilter.CASH -> "Cash"
-                                    PaymentModeFilter.UPI -> "UPI"
-                                    PaymentModeFilter.BANK_TRANSFER -> "Bank"
-                                    PaymentModeFilter.CHEQUE -> "Cheque"
-                                }
-                                FilterChip(
-                                    selected = selectedModeFilter == mode,
-                                    onClick = { viewModel.setPaymentModeFilter(mode) },
-                                    label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                                    shape = RoundedCornerShape(20.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 4. HEADER TITLE FOR RECENT COLLECTIONS
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "RECENT COLLECTIONS (${filteredPayments.size})",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Bold,
-                                color = RoyalBluePrimary,
-                                letterSpacing = 1.sp
+                            // Payment Mode / Custom Filter Button
+                            FilterChip(
+                                selected = selectedModeFilter != PaymentModeFilter.ALL || customStartDate != null,
+                                onClick = { showCustomDateDialog = true },
+                                label = { Text("Filters", style = MaterialTheme.typography.labelMedium) },
+                                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                                shape = RoundedCornerShape(20.dp)
                             )
-                        )
+                        }
                     }
                 }
 
-                // 5. ERROR STATE CARD (IF ANY)
-                if (errorMessage != null) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(top = 8.dp, bottom = 140.dp)
+                ) {
+                    // HEADER FOR LIST COUNT
                     item {
-                        Card(
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            colors = CardDefaults.cardColors(containerColor = ErrorRedContainer),
-                            shape = RoundedCornerShape(14.dp)
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(14.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Text(
+                                text = "PAYMENT RECORDS (${filteredPayments.size})",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoyalBluePrimary,
+                                    letterSpacing = 1.sp
+                                )
+                            )
+                        }
+                    }
+
+                    // ERROR STATE CARD (IF ANY)
+                    if (errorMessage != null) {
+                        item {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                colors = CardDefaults.cardColors(containerColor = ErrorRedContainer),
+                                shape = RoundedCornerShape(14.dp)
                             ) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed)
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text("Unable to load transactions", fontWeight = FontWeight.Bold, color = ErrorRed)
-                                    Text(errorMessage ?: "", style = MaterialTheme.typography.bodySmall, color = ErrorRed)
-                                }
-                                TextButton(onClick = { errorMessage = null; viewModel.triggerSync() }) {
-                                    Text("Retry", fontWeight = FontWeight.Bold, color = ErrorRed)
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed)
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Unable to load transactions", fontWeight = FontWeight.Bold, color = ErrorRed)
+                                        Text(errorMessage ?: "", style = MaterialTheme.typography.bodySmall, color = ErrorRed)
+                                    }
+                                    TextButton(onClick = { errorMessage = null; viewModel.triggerSync() }) {
+                                        Text("Retry", fontWeight = FontWeight.Bold, color = ErrorRed)
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // 6. LOADING STATE (SKELETON LOADER)
-                if (isLoading) {
-                    items(4) {
-                        PaymentSkeletonCard()
-                    }
-                } else if (filteredPayments.isEmpty()) {
-                    // 7. EMPTY STATE
-                    item {
-                        PaymentDashboardEmptyState(
-                            onCollectFirst = {
-                                targetPolicyForCollection = null
-                                showRecordPaymentDialog = true
-                            }
-                        )
-                    }
-                } else {
-                    // 8. RECENT COLLECTIONS LIST CARDS
-                    itemsIndexed(filteredPayments, key = { _, payment -> payment.id }) { index, payment ->
-                        val matchingPolicy = allPolicies.find { it.id == payment.policyId }
-                        val matchingCustomer = allCustomers.find { it.id == payment.customerId }
-                        val remainingBal = getRemainingBalanceForPayment(payment, matchingPolicy, allPayments)
-
-                        RecentCollectionCard(
-                            payment = payment,
-                            policy = matchingPolicy,
-                            customer = matchingCustomer,
-                            remainingBalance = remainingBal,
-                            onCollectPremium = {
-                                targetPolicyForCollection = matchingPolicy
-                                showRecordPaymentDialog = true
-                            },
-                            onViewReceipt = { selectedPaymentForReceipt = payment },
-                            onShareReceipt = {
-                                val shareText = generateReceiptShareText(
-                                    payment = payment,
-                                    agentName = agentProfile?.agentName ?: "LIC Agent",
-                                    agencyCode = agentProfile?.agencyCode ?: "",
-                                    branch = agentProfile?.branchName ?: ""
-                                )
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    putExtra(Intent.EXTRA_TEXT, shareText)
-                                    type = "text/plain"
+                    // LOADING / EMPTY / LIST STATES
+                    if (isLoading) {
+                        items(4) {
+                            PaymentSkeletonCard()
+                        }
+                    } else if (allPayments.isEmpty()) {
+                        item {
+                            PaymentDashboardEmptyState(
+                                onCollectFirst = {
+                                    targetPolicyForCollection = null
+                                    showRecordPaymentDialog = true
                                 }
-                                context.startActivity(Intent.createChooser(intent, "Share Premium Receipt"))
-                            },
-                            onWhatsAppReceipt = {
-                                val phone = matchingCustomer?.whatsapp?.ifEmpty { matchingCustomer.mobile }
-                                    ?: matchingCustomer?.mobile ?: ""
-                                val shareText = generateReceiptShareText(
-                                    payment = payment,
-                                    agentName = agentProfile?.agentName ?: "LIC Agent",
-                                    agencyCode = agentProfile?.agencyCode ?: "",
-                                    branch = agentProfile?.branchName ?: ""
-                                )
-                                if (phone.isNotBlank()) {
-                                    val cleanPhone = phone.replace(Regex("[^0-9]"), "")
-                                    val formattedPhone = if (cleanPhone.length == 10) "91$cleanPhone" else cleanPhone
-                                    try {
-                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$formattedPhone&text=${URLEncoder.encode(shareText, "UTF-8")}"))
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
+                            )
+                        }
+                    } else if (filteredPayments.isEmpty()) {
+                        item {
+                            NoMatchingRecordsEmptyState(
+                                query = searchQuery,
+                                onResetFilters = {
+                                    viewModel.clearAllFilters()
+                                    activeDateFilter = PaymentDashboardDateFilter.ALL
+                                }
+                            )
+                        }
+                    } else {
+                        // RECENT COLLECTIONS COMPACT CARDS
+                        itemsIndexed(filteredPayments, key = { _, payment -> payment.id }) { index, payment ->
+                            val matchingPolicy = allPolicies.find { it.id == payment.policyId }
+                            val matchingCustomer = allCustomers.find { it.id == payment.customerId }
+                            val remainingBal = getRemainingBalanceForPayment(payment, matchingPolicy, allPayments)
+
+                            val customerToPass = matchingCustomer ?: CustomerEntity(
+                                id = payment.customerId,
+                                name = payment.customerName,
+                                mobile = "",
+                                email = "",
+                                address = "",
+                                dob = "",
+                                occupation = ""
+                            )
+
+                            RecentCollectionCard(
+                                payment = payment,
+                                policy = matchingPolicy,
+                                customer = matchingCustomer,
+                                remainingBalance = remainingBal,
+                                onCollectPremium = {
+                                    targetPolicyForCollection = matchingPolicy
+                                    showRecordPaymentDialog = true
+                                },
+                                onViewReceipt = { selectedPaymentForReceipt = payment },
+                                onShareReceipt = {
+                                    val shareText = generateReceiptShareText(
+                                        payment = payment,
+                                        agentName = agentProfile?.agentName ?: "LIC Agent",
+                                        agencyCode = agentProfile?.agencyCode ?: "",
+                                        branch = agentProfile?.branchName ?: ""
+                                    )
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        putExtra(Intent.EXTRA_TEXT, shareText)
+                                        type = "text/plain"
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Share Premium Receipt"))
+                                },
+                                onWhatsAppReceipt = {
+                                    val phone = matchingCustomer?.whatsapp?.ifEmpty { matchingCustomer.mobile }
+                                        ?: matchingCustomer?.mobile ?: ""
+                                    val shareText = generateReceiptShareText(
+                                        payment = payment,
+                                        agentName = agentProfile?.agentName ?: "LIC Agent",
+                                        agencyCode = agentProfile?.agencyCode ?: "",
+                                        branch = agentProfile?.branchName ?: ""
+                                    )
+                                    if (phone.isNotBlank()) {
+                                        val cleanPhone = phone.replace(Regex("[^0-9]"), "")
+                                        val formattedPhone = if (cleanPhone.length == 10) "91$cleanPhone" else cleanPhone
+                                        try {
+                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send?phone=$formattedPhone&text=${URLEncoder.encode(shareText, "UTF-8")}"))
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            val intent = Intent(Intent.ACTION_SEND).apply {
+                                                putExtra(Intent.EXTRA_TEXT, shareText)
+                                                type = "text/plain"
+                                            }
+                                            context.startActivity(Intent.createChooser(intent, "Share Receipt"))
+                                        }
+                                    } else {
                                         val intent = Intent(Intent.ACTION_SEND).apply {
                                             putExtra(Intent.EXTRA_TEXT, shareText)
                                             type = "text/plain"
                                         }
                                         context.startActivity(Intent.createChooser(intent, "Share Receipt"))
                                     }
-                                } else {
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        putExtra(Intent.EXTRA_TEXT, shareText)
-                                        type = "text/plain"
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Share Receipt"))
-                                }
-                            },
-                            onEdit = { editingPayment = payment },
-                            onDelete = { deletingPayment = payment }
-                        )
+                                },
+                                onEdit = { editingPayment = payment },
+                                onDelete = { deletingPayment = payment },
+                                onCustomerClick = { selectedCustomerForHistory = customerToPass }
+                            )
+                        }
                     }
                 }
             }
@@ -872,7 +724,8 @@ fun RecentCollectionCard(
     onShareReceipt: () -> Unit,
     onWhatsAppReceipt: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onCustomerClick: ((CustomerEntity) -> Unit)? = null
 ) {
     val (modeIcon, modeColor) = when (payment.paymentMode.uppercase()) {
         "UPI" -> Icons.Default.QrCodeScanner to RoyalBluePrimary
@@ -881,10 +734,27 @@ fun RecentCollectionCard(
         else -> Icons.Default.AccountBalance to RoyalBlueLight
     }
 
-    val planName = policy?.planName ?: "LIC Policy Plan"
-    val isFullyPaid = remainingBalance == 0.0
+    val isFullyPaid = remainingBalance <= 0.0
+    val isPartial = !isFullyPaid && payment.paidAmount > 0.0
+    val statusText = when {
+        isFullyPaid -> "Paid"
+        isPartial -> "Partial"
+        else -> "Pending"
+    }
 
-    // Initials for Customer Photo Avatar
+    val statusBgColor = when (statusText) {
+        "Paid" -> EmeraldGreenContainer
+        "Partial" -> AccentOrangeContainer
+        else -> ErrorRedContainer
+    }
+
+    val statusTextColor = when (statusText) {
+        "Paid" -> OnEmeraldGreenContainer
+        "Partial" -> OnAccentOrangeContainer
+        else -> ErrorRed
+    }
+
+    // Initials for Customer Avatar
     val initials = remember(payment.customerName) {
         payment.customerName.split(" ")
             .mapNotNull { it.firstOrNull()?.toString() }
@@ -894,133 +764,151 @@ fun RecentCollectionCard(
             .ifEmpty { "C" }
     }
 
+    val fallbackCustomer = customer ?: CustomerEntity(
+        id = payment.customerId,
+        name = payment.customerName,
+        mobile = "",
+        email = "",
+        address = "",
+        dob = "",
+        occupation = ""
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 6.dp)
-            .shadow(2.dp, RoundedCornerShape(16.dp)),
+            .shadow(2.dp, RoundedCornerShape(16.dp))
+            .clickable {
+                onCustomerClick?.invoke(fallbackCustomer)
+            },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Top Customer Row: Avatar + Name + Policy # + Paid Amount
+            // Header Row: Customer Name + Status Chip
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Customer Photo / Initials Avatar
-                Surface(
-                    shape = CircleShape,
-                    color = RoyalBluePrimary,
-                    modifier = Modifier.size(42.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
+                    Surface(
+                        shape = CircleShape,
+                        color = RoyalBluePrimary,
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = initials,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 14.sp
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Column {
                         Text(
-                            text = initials,
+                            text = payment.customerName,
                             style = MaterialTheme.typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 15.sp
-                            )
+                                fontSize = 16.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Policy: ${payment.policyNumber}",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 13.sp
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
+                Surface(
+                    color = statusBgColor,
+                    shape = RoundedCornerShape(20.dp)
+                ) {
                     Text(
-                        text = payment.customerName,
-                        style = MaterialTheme.typography.titleMedium.copy(
+                        text = statusText,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall.copy(
                             fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        ),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "$planName • Policy #${payment.policyNumber}",
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "₹${"%.0f".format(payment.paidAmount)}",
-                        style = MaterialTheme.typography.titleMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = EmeraldGreenSecondary,
-                            fontSize = 16.sp
+                            color = statusTextColor,
+                            fontSize = 11.sp
                         )
-                    )
-                    Text(
-                        text = payment.paymentDate,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Info Badges Row: Mode, Receipt No, Status (Paid / Pending)
+            // Details Row: Paid, Balance, Date
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        RoundedCornerShape(10.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // Payment Mode Tag
-                    Surface(
-                        color = modeColor.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(modeIcon, contentDescription = null, tint = modeColor, modifier = Modifier.size(13.dp))
-                            Spacer(modifier = Modifier.width(3.dp))
-                            Text(
-                                text = payment.paymentMode,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = modeColor, fontSize = 10.sp)
-                            )
-                        }
-                    }
-
-                    // Receipt Number Badge
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(6.dp)
-                    ) {
-                        Text(
-                            text = payment.receiptNumber.ifEmpty { "REC-${payment.id}" },
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        )
-                    }
-                }
-
-                // Status Badge (Paid / Pending)
-                Surface(
-                    color = if (isFullyPaid) EmeraldGreenContainer else AccentOrangeContainer,
-                    shape = RoundedCornerShape(6.dp)
-                ) {
+                Column {
                     Text(
-                        text = if (isFullyPaid) "Paid" else "Pending ₹${"%.0f".format(remainingBalance)}",
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        style = MaterialTheme.typography.labelSmall.copy(
+                        text = "Paid: ₹${"%.0f".format(payment.paidAmount)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(
                             fontWeight = FontWeight.Bold,
-                            color = if (isFullyPaid) OnEmeraldGreenContainer else OnAccentOrangeContainer,
-                            fontSize = 10.sp
+                            color = EmeraldGreenSecondary,
+                            fontSize = 14.sp
                         )
                     )
+                    Text(
+                        text = "Balance: ₹${"%.0f".format(remainingBalance.coerceAtLeast(0.0))}",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (remainingBalance > 0) ErrorRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp
+                        )
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = payment.paymentDate,
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 12.sp
+                        )
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(modeIcon, contentDescription = null, tint = modeColor, modifier = Modifier.size(12.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = payment.paymentMode,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Medium,
+                                color = modeColor,
+                                fontSize = 11.sp
+                            )
+                        )
+                    }
                 }
             }
 
@@ -1035,38 +923,18 @@ fun RecentCollectionCard(
                 )
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
             Spacer(modifier = Modifier.height(8.dp))
 
-            // QUICK ACTIONS ROW (Collect Premium, View Receipt, Share Receipt, WhatsApp Receipt)
+            // Quick Actions Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // 1. Collect Premium (Royal Blue filled button)
-                Button(
-                    onClick = onCollectPremium,
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 6.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = RoyalBluePrimary,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(38.dp)
-                ) {
-                    Icon(Icons.Default.Payments, contentDescription = "Collect", tint = Color.White, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(3.dp))
-                    Text("Collect", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White))
-                }
-
-                // 2. View Receipt (White outlined button)
+                // Receipt Button
                 OutlinedButton(
                     onClick = onViewReceipt,
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = Color.White,
                         contentColor = RoyalBluePrimary
@@ -1074,18 +942,18 @@ fun RecentCollectionCard(
                     border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBluePrimary),
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
+                        .height(34.dp)
                 ) {
-                    Icon(Icons.Default.ReceiptLong, contentDescription = "View Details", tint = RoyalBluePrimary, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Default.ReceiptLong, contentDescription = "Receipt", tint = RoyalBluePrimary, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
                     Text("Receipt", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp, color = RoyalBluePrimary))
                 }
 
-                // 3. Share Receipt (White outlined button)
+                // Share Button
                 OutlinedButton(
                     onClick = onShareReceipt,
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = Color.White,
                         contentColor = RoyalBlueDark
@@ -1093,25 +961,25 @@ fun RecentCollectionCard(
                     border = androidx.compose.foundation.BorderStroke(1.dp, RoyalBlueDark),
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
+                        .height(34.dp)
                 ) {
                     Icon(Icons.Default.Share, contentDescription = "Share", tint = RoyalBlueDark, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
                     Text("Share", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, fontSize = 11.sp, color = RoyalBlueDark))
                 }
 
-                // 4. WhatsApp Receipt (WhatsApp Green filled button)
+                // WhatsApp Button
                 Button(
                     onClick = onWhatsAppReceipt,
                     shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 6.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF25D366),
                         contentColor = Color.White
                     ),
                     modifier = Modifier
                         .weight(1f)
-                        .height(38.dp)
+                        .height(34.dp)
                 ) {
                     Icon(Icons.Default.Chat, contentDescription = "WhatsApp", tint = Color.White, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(3.dp))
@@ -1296,7 +1164,6 @@ fun PaymentCollectionDialog(
 
     val enteredAmount = amountStr.toDoubleOrNull() ?: 0.0
     val newRemainingBalance = (currentRemainingBeforeNew - enteredAmount).coerceAtLeast(0.0)
-    val isCompletingCycle = enteredAmount >= currentRemainingBeforeNew && currentRemainingBeforeNew > 0
 
     var showCustomerDropdown by remember { mutableStateOf(false) }
     var showPolicyDropdown by remember { mutableStateOf(false) }
@@ -1309,21 +1176,18 @@ fun PaymentCollectionDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.ArrowBack,
-                            contentDescription = "Back",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Record Premium",
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                Text(
+                    text = "Record Premium",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = "Close",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1333,20 +1197,20 @@ fun PaymentCollectionDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (errorMessage != null) {
                     Surface(
                         color = ErrorRedContainer,
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
+                            modifier = Modifier.padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed)
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = errorMessage ?: "",
                                 style = MaterialTheme.typography.bodySmall.copy(
@@ -1358,11 +1222,11 @@ fun PaymentCollectionDialog(
                     }
                 }
 
-                // 1. CUSTOMER SEARCH & SELECTOR
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 1. CUSTOMER SELECTOR
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        "1. Customer Search",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        "Customer",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                     OutlinedTextField(
                         value = selectedCustomer?.name ?: customerSearchQuery,
@@ -1374,8 +1238,8 @@ fun PaymentCollectionDialog(
                                 selectedPolicy = null
                             }
                         },
-                        placeholder = { Text("Search or select customer...") },
-                        leadingIcon = { Icon(Icons.Default.PersonSearch, contentDescription = null) },
+                        placeholder = { Text("Select customer") },
+                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(20.dp)) },
                         trailingIcon = {
                             IconButton(onClick = { showCustomerDropdown = !showCustomerDropdown }) {
                                 Icon(
@@ -1388,7 +1252,7 @@ fun PaymentCollectionDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("record_customer_search"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp)
                     )
 
                     if (showCustomerDropdown && customersList.isNotEmpty()) {
@@ -1399,8 +1263,8 @@ fun PaymentCollectionDialog(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 160.dp),
-                            shape = RoundedCornerShape(12.dp),
+                                .heightIn(max = 140.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -1415,10 +1279,10 @@ fun PaymentCollectionDialog(
                                                 val matchingPol = policiesList.firstOrNull { it.customerId == cust.id }
                                                 selectedPolicy = matchingPol
                                             }
-                                            .padding(12.dp),
+                                            .padding(10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.Person, contentDescription = null, tint = RoyalBluePrimary)
+                                        Icon(Icons.Default.Person, contentDescription = null, tint = RoyalBluePrimary, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
                                             Text(cust.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
@@ -1432,18 +1296,18 @@ fun PaymentCollectionDialog(
                     }
                 }
 
-                // 2. POLICY SEARCH & SELECTOR
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 2. POLICY SELECTOR
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        "2. Policy Search",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        "Policy",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                     OutlinedTextField(
                         value = selectedPolicy?.let { "${it.planName} (#${it.policyNumber})" } ?: "",
                         onValueChange = {},
                         readOnly = true,
-                        placeholder = { Text("Select policy...") },
-                        leadingIcon = { Icon(Icons.Default.Policy, contentDescription = null) },
+                        placeholder = { Text("Select policy") },
+                        leadingIcon = { Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(20.dp)) },
                         trailingIcon = {
                             IconButton(onClick = { showPolicyDropdown = !showPolicyDropdown }) {
                                 Icon(
@@ -1456,15 +1320,15 @@ fun PaymentCollectionDialog(
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("record_policy_search"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp)
                     )
 
                     if (showPolicyDropdown && availablePolicies.isNotEmpty()) {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 160.dp),
-                            shape = RoundedCornerShape(12.dp),
+                                .heightIn(max = 140.dp),
+                            shape = RoundedCornerShape(10.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                         ) {
                             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
@@ -1476,10 +1340,10 @@ fun PaymentCollectionDialog(
                                                 selectedPolicy = pol
                                                 showPolicyDropdown = false
                                             }
-                                            .padding(12.dp),
+                                            .padding(10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.Description, contentDescription = null, tint = AccentOrange)
+                                        Icon(Icons.Default.Policy, contentDescription = null, tint = AccentOrange, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Column {
                                             Text("${pol.planName} • Policy #${pol.policyNumber}", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
@@ -1493,44 +1357,89 @@ fun PaymentCollectionDialog(
                     }
                 }
 
-                // 3. AUTO PREMIUM DUE SUMMARY CARD
-                selectedPolicy?.let { pol ->
-                    Surface(
-                        color = RoyalBlueContainer,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth()
+                // 3. COMPACT SUMMARY ROW: Premium Due | Paid Amount | Outstanding Balance
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Premium Due (Auto):", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                                Text("₹${"%.2f".format(installmentAmount)}", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary))
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Paid In Current Cycle:", style = MaterialTheme.typography.bodySmall)
-                                Text("₹${"%.2f".format(paidInCurrentCycle)}", style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold))
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Current Balance Due:", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
-                                Text("₹${"%.2f".format(currentRemainingBeforeNew)}", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = AccentOrange))
-                            }
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.Start
+                        ) {
+                            Text(
+                                text = "Premium Due",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "₹${"%.0f".format(installmentAmount)}",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(26.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        )
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Paid Amount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "₹${"%.0f".format(paidInCurrentCycle)}",
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = EmeraldGreenSecondary)
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(26.dp)
+                                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        )
+
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.End
+                        ) {
+                            Text(
+                                text = "Outstanding",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "₹${"%.0f".format(newRemainingBalance)}",
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (newRemainingBalance > 0) ErrorRed else EmeraldGreenSecondary
+                                )
+                            )
                         }
                     }
                 }
 
-                // 4. AMOUNT RECEIVED INPUT
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 4. AMOUNT RECEIVED
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        "4. Amount Received (₹)",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        "Amount Received",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                     OutlinedTextField(
                         value = amountStr,
@@ -1538,93 +1447,38 @@ fun PaymentCollectionDialog(
                             amountStr = it
                             errorMessage = null
                         },
-                        placeholder = { Text("Enter amount received...") },
-                        leadingIcon = { Icon(Icons.Default.CurrencyRupee, contentDescription = null) },
+                        placeholder = { Text("Enter amount") },
+                        leadingIcon = { Icon(Icons.Default.CurrencyRupee, contentDescription = null, modifier = Modifier.size(20.dp)) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("record_amount_input"),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(10.dp)
                     )
+                }
 
-                    // Quick Chips
-                    Row(
+                // 5. PAYMENT DATE
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Payment Date",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    OutlinedTextField(
+                        value = paymentDate,
+                        onValueChange = { paymentDate = it; errorMessage = null },
+                        placeholder = { Text("YYYY-MM-DD") },
+                        leadingIcon = { Icon(Icons.Default.Event, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        FilterChip(
-                            selected = amountStr == currentRemainingBeforeNew.toString(),
-                            onClick = { amountStr = currentRemainingBeforeNew.toString() },
-                            label = { Text("Full Balance (₹${"%.0f".format(currentRemainingBeforeNew)})", style = MaterialTheme.typography.labelSmall) }
-                        )
-                        if (currentRemainingBeforeNew > 1000) {
-                            FilterChip(
-                                selected = amountStr == (currentRemainingBeforeNew / 2).toString(),
-                                onClick = { amountStr = (currentRemainingBeforeNew / 2).toString() },
-                                label = { Text("50% (₹${"%.0f".format(currentRemainingBeforeNew / 2)})", style = MaterialTheme.typography.labelSmall) }
-                            )
-                        }
-                    }
+                        shape = RoundedCornerShape(10.dp)
+                    )
                 }
 
-                // 5. REMAINING BALANCE BADGE
-                Surface(
-                    color = if (newRemainingBalance == 0.0) EmeraldGreenContainer else AccentOrangeContainer,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Remaining Balance (Auto):",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                color = if (newRemainingBalance == 0.0) OnEmeraldGreenContainer else OnAccentOrangeContainer
-                            )
-                            Text(
-                                text = "₹${"%.2f".format(newRemainingBalance)}",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (newRemainingBalance == 0.0) EmeraldGreenSecondary else AccentOrange
-                                )
-                            )
-                        }
-                        if (isCompletingCycle || newRemainingBalance == 0.0) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Installment Paid! Next due date will advance automatically.",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = EmeraldGreenSecondary,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // 6. PAYMENT DATE
-                OutlinedTextField(
-                    value = paymentDate,
-                    onValueChange = { paymentDate = it; errorMessage = null },
-                    label = { Text("Payment Date (YYYY-MM-DD)") },
-                    leadingIcon = { Icon(Icons.Default.Event, contentDescription = null) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                // 7. PAYMENT MODE
+                // 6. PAYMENT MODE
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
                         "Payment Mode",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1641,15 +1495,21 @@ fun PaymentCollectionDialog(
                     }
                 }
 
-                // 8. NOTES
-                OutlinedTextField(
-                    value = notes,
-                    onValueChange = { notes = it },
-                    label = { Text("Notes / Cheque No / Reference") },
-                    placeholder = { Text("Optional payment remarks...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                )
+                // 7. REMARKS
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        "Remarks",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                    )
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        placeholder = { Text("Cheque No / Reference / Notes...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1674,14 +1534,14 @@ fun PaymentCollectionDialog(
                     onDismiss()
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(48.dp)
                     .testTag("save_payment_button")
             ) {
-                Icon(Icons.Default.Check, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
+                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text("Save Payment", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
             }
         },

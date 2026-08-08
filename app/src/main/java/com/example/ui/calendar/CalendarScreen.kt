@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
+import com.example.util.NoMatchingRecordsEmptyState
+import com.example.util.SearchFilterEngine
+
 // Royal Blue Dark Theme Palette
 private val DarkBg = Color(0xFF0F172A)
 private val CardBg = Color(0xFF1E293B)
@@ -148,10 +151,11 @@ fun CalendarScreen(
         if (searchQuery.isBlank()) {
             baseList
         } else {
-            baseList.filter {
-                it.name.contains(searchQuery, ignoreCase = true) ||
-                        it.policyNumber.contains(searchQuery, ignoreCase = true) ||
-                        it.status.contains(searchQuery, ignoreCase = true)
+            baseList.filter { customer ->
+                SearchFilterEngine.matchesQuery(
+                    query = searchQuery,
+                    fields = listOf(customer.name, customer.policyNumber, customer.planName, customer.phone, customer.status, customer.mode)
+                )
             }
         }
     }

@@ -250,7 +250,23 @@ fun ReceiptScreen(
                         OutlinedButton(
                             onClick = {
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar("Downloading PDF Receipt...")
+                                    snackbarHostState.showSnackbar("Generating PDF Receipt...")
+                                    val reportData = com.example.pdf.PdfReportData(
+                                        reportType = com.example.pdf.ReportType.PREMIUM_RECEIPT,
+                                        payment = displayPayment,
+                                        agentProfile = com.example.data.local.AgentProfileEntity(
+                                            agentName = agentName.substringBefore(" ("),
+                                            agencyCode = agencyCode,
+                                            branchName = branch
+                                        )
+                                    )
+                                    val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                    res.onSuccess { file ->
+                                        snackbarHostState.showSnackbar("PDF Receipt Saved: ${file.name}")
+                                        com.example.pdf.PdfReportGenerator.openPdf(context, file)
+                                    }.onFailure { err ->
+                                        snackbarHostState.showSnackbar("PDF Generation Failed: ${err.message}")
+                                    }
                                 }
                             },
                             shape = RoundedCornerShape(16.dp),
