@@ -16,6 +16,8 @@ import com.example.data.local.AgentProfileEntity
 import com.example.data.local.CustomerEntity
 import com.example.data.local.PaymentEntity
 import com.example.data.local.PolicyEntity
+import com.example.ui.payment.PolicyPaymentSummary
+import com.example.ui.payment.calculatePaymentStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -34,7 +36,8 @@ enum class ReportType(val title: String, val fileNamePrefix: String) {
     OVERDUE("Overdue Report", "Overdue_Report"),
     MONTHLY_COLLECTION("Monthly Collection Report", "Monthly_Collection"),
     OUTSTANDING_PREMIUM("Outstanding Premium Report", "Outstanding_Premium"),
-    COMPLETE_PORTFOLIO("Complete Portfolio Report", "Complete_Portfolio")
+    COMPLETE_PORTFOLIO("Complete Portfolio Report", "Complete_Portfolio"),
+    CUSTOMER_PAYMENT_HISTORY("Customer Payment History", "Customer_Payment_History")
 }
 
 data class PdfReportData(
@@ -98,7 +101,8 @@ object PdfReportGenerator {
                 ReportType.MONTHLY_COLLECTION -> {
                     yPos = drawMonthlyCollectionContent(canvas, data)
                 }
-                ReportType.COMPLETE_PORTFOLIO -> {
+                ReportType.COMPLETE_PORTFOLIO,
+                ReportType.CUSTOMER_PAYMENT_HISTORY -> {
                     yPos = drawPortfolioReportContent(canvas, data)
                 }
             }
@@ -860,6 +864,334 @@ object PdfReportGenerator {
         } catch (e: Exception) {
             Log.e(TAG, "No PDF viewer app found: ${e.localizedMessage}", e)
             Toast.makeText(context, "No application found to view PDF", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * Generates a complete Payment History PDF for a single customer & policy.
+     */
+    suspend fun generateCustomerPaymentHistoryPdf(
+        context: Context,
+        summary: PolicyPaymentSummary,
+        agentProfile: AgentProfileEntity?
+    ): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            val pdfDocument = PdfDocument()
+            val pageWidth = 842 // A4 Landscape width in points
+            val pageHeight = 595 // A4 Landscape height in points
+            val margin = 36f
+
+            var pageNum = 1
+            var pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNum).create()
+            var page = pdfDocument.startPage(pageInfo)
+            var canvas = page.canvas
+
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+            // Header Banner Drawing Function
+            fun drawHeaderBanner(c: Canvas, pNum: Int): Float {
+                // Royal Blue Header
+                paint.color = COLOR_ROYAL_BLUE
+                paint.style = Paint.Style.FILL
+                c.drawRect(0f, 0f, pageWidth.toFloat(), 75f, paint)
+
+                // Gold Strip
+                paint.color = COLOR_GOLD
+                c.drawRect(0f, 75f, pageWidth.toFloat(), 78f, paint)
+
+                // Title
+                paint.color = COLOR_WHITE
+                paint.textSize = 16f
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                c.drawText("LIC PREMIUM REMINDER PRO", margin, 30f, paint)
+
+                paint.textSize = 12f
+                paint.color = COLOR_GOLD
+                c.drawText("LIC PREMIUM PAYMENT HISTORY", margin, 52f, paint)
+
+                // Agent Info on Right
+                val agentName = agentProfile?.agentName ?: "LIC Agent"
+                val agencyCode = agentProfile?.agencyCode ?: "LIC-089421"
+                val branch = "${agentProfile?.branchName ?: "Branch"} (${agentProfile?.branchCode ?: "08B"})"
+
+                paint.textSize = 8.5f
+                paint.color = COLOR_WHITE
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                paint.textAlign = Paint.Align.RIGHT
+
+                val rightX = pageWidth - margin
+                c.drawText("Issued By: $agentName", rightX, 24f, paint)
+                c.drawText("Agency Code: $agencyCode", rightX, 38f, paint)
+                c.drawText("Branch: $branch", rightX, 52f, paint)
+                val mob = agentProfile?.mobile ?: ""
+                if (mob.isNotBlank()) {
+                    c.drawText("Ph: $mob", rightX, 66f, paint)
+                }
+
+                paint.textAlign = Paint.Align.LEFT
+                return 90f
+            }
+
+            fun drawFooterLine(c: Canvas, pNum: Int) {
+                val footerY = pageHeight - 25f
+                paint.color = COLOR_BORDER
+                paint.strokeWidth = 1f
+                paint.style = Paint.Style.STROKE
+                c.drawLine(margin, footerY - 10f, pageWidth - margin, footerY - 10f, paint)
+
+                paint.style = Paint.Style.FILL
+                paint.textSize = 8f
+                paint.color = COLOR_TEXT_MUTED
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                c.drawText("Generated by LIC Premium Reminder Pro", margin, footerY, paint)
+
+                val sdf = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
+                val dateStr = "Generated Date: ${sdf.format(Date())} | Page $pNum"
+                paint.textAlign = Paint.Align.RIGHT
+                c.drawText(dateStr, pageWidth - margin, footerY, paint)
+                paint.textAlign = Paint.Align.LEFT
+            }
+
+            var y = drawHeaderBanner(canvas, pageNum)
+
+            // Draw Customer & Policy Info Box
+            paint.color = COLOR_ALT_ROW
+            paint.style = Paint.Style.FILL
+            val infoRect = RectF(margin, y, pageWidth - margin, y + 65f)
+            canvas.drawRoundRect(infoRect, 6f, 6f, paint)
+
+            paint.color = COLOR_BORDER
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1f
+            canvas.drawRoundRect(infoRect, 6f, 6f, paint)
+
+            paint.style = Paint.Style.FILL
+            paint.textSize = 9.5f
+            paint.color = COLOR_TEXT_DARK
+
+            val planNameStr = summary.policy?.planName ?: "LIC Policy"
+            val mobileStr = summary.customerMobile.ifEmpty { summary.customer?.mobile ?: summary.customer?.whatsapp ?: "N/A" }
+
+            val col1 = margin + 14f
+            val col2 = margin + 270f
+
+            drawDetailPair(canvas, paint, "Customer Name:", summary.customerName, col1, y + 22f)
+            drawDetailPair(canvas, paint, "Mobile:", mobileStr, col2, y + 22f)
+            drawDetailPair(canvas, paint, "Policy No:", summary.policyNumber, col1, y + 46f)
+            drawDetailPair(canvas, paint, "Plan Name:", planNameStr, col2, y + 46f)
+
+            y += 75f
+
+            // Draw Summary Box
+            paint.color = COLOR_ROYAL_BLUE
+            paint.style = Paint.Style.FILL
+            val summaryRect = RectF(margin, y, pageWidth - margin, y + 45f)
+            canvas.drawRoundRect(summaryRect, 6f, 6f, paint)
+
+            paint.color = COLOR_WHITE
+            paint.textSize = 10f
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+
+            val boxColWidth = (pageWidth - margin * 2) / 4f
+            val boxY = y + 28f
+
+            fun drawBoxStat(label: String, valStr: String, colIdx: Int, valueColor: Int = COLOR_WHITE) {
+                val startX = margin + (colIdx * boxColWidth) + 12f
+                paint.color = Color.parseColor("#94A3B8")
+                paint.textSize = 8f
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                canvas.drawText(label, startX, boxY - 10f, paint)
+
+                paint.color = valueColor
+                paint.textSize = 11f
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                canvas.drawText(valStr, startX, boxY + 6f, paint)
+            }
+
+            val statusValColor = when (summary.status.label) {
+                "Paid" -> COLOR_GOLD
+                "Partial" -> Color.parseColor("#F59E0B")
+                "Overpaid" -> COLOR_SUCCESS
+                else -> COLOR_WHITE
+            }
+
+            drawBoxStat("TOTAL DUE", "₹${String.format("%,.0f", summary.totalDue)}", 0)
+            drawBoxStat("TOTAL PAID", "₹${String.format("%,.0f", summary.totalPaid)}", 1, COLOR_GOLD)
+            drawBoxStat("TOTAL BALANCE", "₹${String.format("%,.0f", summary.balance)}", 2, if (summary.balance > 0) Color.parseColor("#F87171") else COLOR_WHITE)
+            drawBoxStat("ADVANCE / EXCESS", "₹${String.format("%,.0f", summary.advance)}", 3, Color.parseColor("#A855F7"))
+            drawBoxStat("STATUS", summary.status.label.uppercase(Locale.getDefault()), 4, statusValColor)
+
+            y += 58f
+
+            // Table Header setup - 8 columns
+            val colWidths = floatArrayOf(35f, 75f, 85f, 85f, 70f, 85f, 60f, 65f)
+            val colX = FloatArray(8)
+            var curX = margin
+            for (i in 0..7) {
+                colX[i] = curX
+                curX += colWidths[i]
+            }
+
+            fun drawTableHeader(c: Canvas, startY: Float): Float {
+                paint.color = COLOR_ROYAL_BLUE
+                paint.style = Paint.Style.FILL
+                val rect = RectF(margin, startY, pageWidth - margin, startY + 22f)
+                c.drawRect(rect, paint)
+
+                paint.color = COLOR_WHITE
+                paint.textSize = 8.5f
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+
+                val rowY = startY + 15f
+                c.drawText("S.No", colX[0] + 4f, rowY, paint)
+                c.drawText("Date", colX[1] + 4f, rowY, paint)
+                c.drawText("Due Amt", colX[2] + 4f, rowY, paint)
+                c.drawText("Paid Amt", colX[3] + 4f, rowY, paint)
+                c.drawText("Balance", colX[4] + 4f, rowY, paint)
+                c.drawText("Advance/Excess", colX[5] + 4f, rowY, paint)
+                c.drawText("Mode", colX[6] + 4f, rowY, paint)
+                c.drawText("Status", colX[7] + 4f, rowY, paint)
+
+                return startY + 22f
+            }
+
+            y = drawTableHeader(canvas, y)
+
+            // Draw Payments
+            val paymentsSorted = summary.payments.sortedBy { it.paymentDate }
+            var cumulativePaid = 0.0
+
+            if (paymentsSorted.isEmpty()) {
+                paint.color = COLOR_TEXT_MUTED
+                paint.textSize = 9.5f
+                paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+                canvas.drawText("No payments recorded yet for this policy.", margin + 12f, y + 20f, paint)
+                y += 35f
+            } else {
+                paymentsSorted.forEachIndexed { index, payment ->
+                    // Multi-page page break check
+                    if (y > pageHeight - 90f) {
+                        drawFooterLine(canvas, pageNum)
+                        pdfDocument.finishPage(page)
+
+                        pageNum++
+                        pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNum).create()
+                        page = pdfDocument.startPage(pageInfo)
+                        canvas = page.canvas
+
+                        y = drawHeaderBanner(canvas, pageNum)
+                        y = drawTableHeader(canvas, y)
+                    }
+
+                    cumulativePaid += payment.paidAmount
+                    val rowCalc = calculatePaymentStatus(summary.totalDue, cumulativePaid)
+
+                    val rowH = 20f
+                    if (index % 2 == 1) {
+                        paint.color = COLOR_ALT_ROW
+                        paint.style = Paint.Style.FILL
+                        canvas.drawRect(margin, y, pageWidth - margin, y + rowH, paint)
+                    }
+
+                    paint.color = COLOR_TEXT_DARK
+                    paint.textSize = 8f
+                    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+
+                    val rowY = y + 14f
+                    canvas.drawText("${index + 1}", colX[0] + 4f, rowY, paint)
+                    canvas.drawText(payment.paymentDate, colX[1] + 4f, rowY, paint)
+                    canvas.drawText("₹${String.format("%,.0f", summary.totalDue)}", colX[2] + 4f, rowY, paint)
+
+                    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    paint.color = COLOR_SUCCESS
+                    canvas.drawText("₹${String.format("%,.0f", payment.paidAmount)}", colX[3] + 4f, rowY, paint)
+
+                    paint.color = if (rowCalc.balance > 0) COLOR_DANGER else COLOR_TEXT_DARK
+                    canvas.drawText("₹${String.format("%,.0f", rowCalc.balance)}", colX[4] + 4f, rowY, paint)
+
+                    paint.color = if (rowCalc.advance > 0) Color.parseColor("#A855F7") else COLOR_TEXT_DARK
+                    canvas.drawText("₹${String.format("%,.0f", rowCalc.advance)}", colX[5] + 4f, rowY, paint)
+
+                    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+                    paint.color = COLOR_TEXT_DARK
+                    canvas.drawText(payment.paymentMode, colX[6] + 4f, rowY, paint)
+
+                    paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                    paint.color = when (rowCalc.status.label) {
+                        "Paid" -> COLOR_SUCCESS
+                        "Partial" -> Color.parseColor("#D97706")
+                        "Overpaid" -> COLOR_SUCCESS
+                        else -> COLOR_DANGER
+                    }
+                    canvas.drawText(rowCalc.status.label, colX[7] + 4f, rowY, paint)
+
+                    y += rowH
+                }
+            }
+
+            y += 15f
+
+            // Bottom Summary Box
+            if (y > pageHeight - 110f) {
+                drawFooterLine(canvas, pageNum)
+                pdfDocument.finishPage(page)
+
+                pageNum++
+                pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNum).create()
+                page = pdfDocument.startPage(pageInfo)
+                canvas = page.canvas
+
+                y = drawHeaderBanner(canvas, pageNum)
+            }
+
+            paint.color = COLOR_ALT_ROW
+            paint.style = Paint.Style.FILL
+            val bottomRect = RectF(margin, y, pageWidth - margin, y + 45f)
+            canvas.drawRoundRect(bottomRect, 6f, 6f, paint)
+
+            paint.color = COLOR_BORDER
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1f
+            canvas.drawRoundRect(bottomRect, 6f, 6f, paint)
+
+            paint.style = Paint.Style.FILL
+            paint.textSize = 9.5f
+            paint.color = COLOR_TEXT_DARK
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+
+            val bLineY = y + 26f
+            val bCol1 = margin + 16f
+            val bCol2 = margin + 220f
+            val bCol3 = margin + 420f
+            val bCol4 = margin + 620f
+
+            canvas.drawText("Total Number of Payments: ${paymentsSorted.size}", bCol1, bLineY, paint)
+            canvas.drawText("Total Paid: ₹${String.format("%,.0f", summary.totalPaid)}", bCol2, bLineY, paint)
+            canvas.drawText("Final Balance: ₹${String.format("%,.0f", summary.balance)}", bCol3, bLineY, paint)
+            canvas.drawText("Final Status: ${summary.status.label}", bCol4, bLineY, paint)
+
+            drawFooterLine(canvas, pageNum)
+            pdfDocument.finishPage(page)
+
+            val reportsDir = getReportsDirectory(context)
+            if (!reportsDir.exists()) {
+                reportsDir.mkdirs()
+            }
+
+            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val cleanCustName = summary.customerName.replace(Regex("[^a-zA-Z0-9]"), "_")
+            val pdfFile = File(reportsDir, "LIC_Payment_History_${cleanCustName}_$timeStamp.pdf")
+
+            val outputStream = FileOutputStream(pdfFile)
+            pdfDocument.writeTo(outputStream)
+            pdfDocument.close()
+            outputStream.close()
+
+            Log.i(TAG, "Successfully generated Payment History PDF: ${pdfFile.absolutePath}")
+            Result.success(pdfFile)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to generate Payment History PDF: ${e.localizedMessage}", e)
+            Result.failure(e)
         }
     }
 }

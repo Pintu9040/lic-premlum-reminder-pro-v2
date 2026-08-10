@@ -46,6 +46,7 @@ import com.example.ui.LicViewModel
 import com.example.ui.payment.*
 import com.example.ui.theme.*
 import com.example.util.NoMatchingRecordsEmptyState
+import com.example.util.PaymentAllocationEngine
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 import java.time.LocalDate
@@ -129,21 +130,18 @@ fun CustomerProfileScreen(
     }
 
     val planNameStr = primaryPolicy?.planName ?: "Jeevan Umang (Plan 945)"
-    val totalPremiumAmount = if (customerPolicies.isNotEmpty()) {
-        customerPolicies.sumOf { it.premiumAmount }
-    } else {
-        12500.0
-    }
+    val policySummaries = customerPolicies.map { PaymentAllocationEngine.calculateCurrentDueSummary(it, customerPayments) }
+    val totalPremiumAmount = if (policySummaries.isNotEmpty()) policySummaries.sumOf { it.premiumAmount } else 12500.0
 
     val primaryPremiumMode = primaryPolicy?.premiumMode ?: "Yearly"
     val primaryNextDueDate = primaryPolicy?.dueDate ?: "15 Aug 2026"
 
-    // Outstanding balance & payment status calculations
-    val totalPaidAmount = customerPayments.sumOf { it.paidAmount }
-    val outstandingBalance = (totalPremiumAmount - totalPaidAmount).coerceAtLeast(0.0)
+    // Outstanding balance & payment status calculations for current due cycle
+    val totalPaidAmount = if (policySummaries.isNotEmpty()) policySummaries.sumOf { it.totalPaidForCurrentDue } else customerPayments.sumOf { it.paidAmount }
+    val outstandingBalance = if (policySummaries.isNotEmpty()) policySummaries.sumOf { it.outstanding } else (totalPremiumAmount - totalPaidAmount).coerceAtLeast(0.0)
 
     val overallPaymentStatus = when {
-        outstandingBalance <= 0.0 -> "Paid"
+        outstandingBalance <= 0.0 && totalPremiumAmount > 0.0 -> "Paid"
         totalPaidAmount > 0.0 -> "Partial"
         else -> "Pending"
     }
@@ -329,13 +327,7 @@ fun CustomerProfileScreen(
                                 leadingIcon = { Icon(Icons.Default.TableChart, contentDescription = null, tint = EmeraldGreen) },
                                 onClick = {
                                     showMoreMenu = false
-                                    exportPaymentHistoryToCsv(
-                                        context = context,
-                                        customerName = currentCustomer.name,
-                                        payments = customerPayments,
-                                        policies = customerPolicies
-                                    )
-                                    Toast.makeText(context, "Exported payment history CSV", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Export unavailable - Payment history removed.", Toast.LENGTH_SHORT).show()
                                 }
                             )
 

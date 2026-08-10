@@ -110,15 +110,27 @@ object SearchFilterEngine {
     }
 
     /**
-     * Safely parses LocalDate from String or returns null
+     * Safely parses LocalDate from String using multiple common formats, or returns null
      */
     fun parseLocalDateSafe(dateStr: String?): LocalDate? {
         if (dateStr.isNullOrBlank()) return null
-        return try {
-            LocalDate.parse(dateStr.trim())
-        } catch (_: Throwable) {
-            null
+        val clean = dateStr.trim()
+        try {
+            return LocalDate.parse(clean)
+        } catch (_: Throwable) {}
+
+        val patterns = listOf(
+            "d MMM yyyy", "dd MMM yyyy", "d MMMM yyyy", "dd MMMM yyyy",
+            "dd-MM-yyyy", "d-M-yyyy", "dd/MM/yyyy", "d/M/yyyy",
+            "yyyy-MM-dd", "yyyy/MM/dd"
+        )
+        for (pattern in patterns) {
+            try {
+                val formatter = java.time.format.DateTimeFormatter.ofPattern(pattern, java.util.Locale.ENGLISH)
+                return LocalDate.parse(clean, formatter)
+            } catch (_: Throwable) {}
         }
+        return null
     }
 
     /**
@@ -165,8 +177,8 @@ object SearchFilterEngine {
 @Composable
 fun NoMatchingRecordsEmptyState(
     modifier: Modifier = Modifier,
-    title: String = "No matching records found.",
-    subtitle: String = "Try adjusting your search keywords or clearing active filters.",
+    title: String = "No Payments Found",
+    subtitle: String = "No payments match your current search or filter.",
     query: String = "",
     onResetFilters: (() -> Unit)? = null
 ) {
@@ -235,7 +247,7 @@ fun NoMatchingRecordsEmptyState(
                     border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3B82F6).copy(alpha = 0.5f)),
                     modifier = Modifier.testTag("reset_filters_button")
                 ) {
-                    Text(text = "Clear Search & Filters", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text(text = "Clear Filters", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 }
             }
         }

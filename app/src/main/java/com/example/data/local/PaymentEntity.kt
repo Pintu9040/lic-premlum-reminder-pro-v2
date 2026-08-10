@@ -17,6 +17,7 @@ data class PaymentEntity(
     val paymentMode: String, // "UPI", "Cash", "Cheque", "Net Banking"
     val receiptNumber: String,
     val notes: String = "",
+    val installmentDueDate: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 

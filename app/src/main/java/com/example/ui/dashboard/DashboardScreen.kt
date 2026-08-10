@@ -79,6 +79,7 @@ fun DashboardScreen(
     onNavigateToReminders: () -> Unit,
     onNavigateToCalendar: () -> Unit = {},
     onNavigateToPayments: () -> Unit,
+    onNavigateToRecordPayment: () -> Unit = {},
     onNavigateToReports: () -> Unit = {},
     onNavigateToDocuments: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
@@ -483,7 +484,7 @@ fun DashboardScreen(
                         title = "Payment",
                         icon = Icons.Default.Payments,
                         iconGradient = listOf(Color(0xFF10B981), Color(0xFF047857)),
-                        onClick = onNavigateToPayments,
+                        onClick = onNavigateToRecordPayment,
                         modifier = Modifier.weight(1f),
                         testTag = "action_record_payment"
                     )

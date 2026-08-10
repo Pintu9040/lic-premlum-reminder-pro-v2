@@ -329,6 +329,7 @@ class FirebaseSyncManager(private val context: Context) {
                 "receiptNumber" to payment.receiptNumber,
                 "collectedBy" to "Agent",
                 "notes" to payment.notes,
+                "installmentDueDate" to payment.installmentDueDate,
                 "createdAt" to payment.createdAt,
                 "updatedAt" to System.currentTimeMillis()
             )
@@ -644,6 +645,7 @@ class FirebaseSyncManager(private val context: Context) {
                     paymentMode = doc.getString("paymentMode") ?: "UPI",
                     receiptNumber = doc.getString("receiptNumber") ?: "",
                     notes = doc.getString("notes") ?: "",
+                    installmentDueDate = doc.getString("installmentDueDate") ?: "",
                     createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
                 )
                 db.paymentDao().insertPayment(payment)

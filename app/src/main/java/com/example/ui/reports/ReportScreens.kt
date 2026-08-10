@@ -1,5 +1,7 @@
 package com.example.ui.reports
 
+import android.content.Context
+import android.content.Intent
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -34,9 +36,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.CustomerEntity
+import com.example.data.local.PaymentEntity
+import com.example.data.local.PolicyEntity
+import com.example.pdf.PdfReportData
+import com.example.pdf.PdfReportGenerator
+import com.example.pdf.ReportType
 import com.example.ui.LicViewModel
+import com.example.util.ExcelReportGenerator
 import com.example.util.SearchFilterEngine
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
+import com.example.whatsapp.WhatsAppTemplateType
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
 
 // Royal Blue Dark Theme Palette
 private val DarkBg = Color(0xFF0F172A)
@@ -124,6 +137,11 @@ fun ReportScreen(
     var customEndDate by remember { mutableStateOf("31 Aug 2026") }
     var forceEmptyState by remember { mutableStateOf(false) }
 
+    // Advanced Filter Options
+    var paymentStatusFilter by remember { mutableStateOf("All") } // All, Paid, Partial, Pending, Overpaid
+    var policyStatusFilter by remember { mutableStateOf("All") }  // All, Active, Due, Lapsed
+    var paymentModeFilter by remember { mutableStateOf("All") }   // All, Cash, UPI, Bank, Cheque
+
     // Interactive Dialog States for Controls
     var selectedCustomerForDialog by remember { mutableStateOf<TopCustomerData?>(null) }
     var selectedReceiptForDialog by remember { mutableStateOf<RecentCollectionData?>(null) }
@@ -137,52 +155,153 @@ fun ReportScreen(
     )
 
     // Trigger re-animating charts when filter changes
-    LaunchedEffect(selectedFilter) {
+    LaunchedEffect(selectedFilter, paymentStatusFilter, policyStatusFilter, paymentModeFilter) {
         isChartAnimTriggered = false
         kotlinx.coroutines.delay(50)
         isChartAnimTriggered = true
     }
 
-    // Mock Sample Data for Top Customers
-    val allTopCustomers = remember {
-        listOf(
-            TopCustomerData(1, "Rahul Kumar", "RK", 4, "₹ 48,500", "₹ 12,000", "VIP Client", AccentAmber),
-            TopCustomerData(2, "Anita Das", "AD", 3, "₹ 36,200", "₹ 0", "On Time", AccentGreen),
-            TopCustomerData(3, "Suresh Patel", "SP", 5, "₹ 62,000", "₹ 24,000", "Grace Period", AccentPurple),
-            TopCustomerData(4, "Rajesh Sharma", "RS", 2, "₹ 18,500", "₹ 8,500", "High Volume", RoyalBlueLight),
-            TopCustomerData(5, "Priya Verma", "PV", 3, "₹ 42,000", "₹ 0", "On Time", AccentGreen)
-        )
-    }
+    // -------------------------------------------------------------------------
+    // DYNAMIC DATA CALCULATIONS FROM ROOM DATABASE
+    // -------------------------------------------------------------------------
 
-    // Mock Sample Data for Recent Collections
-    val allRecentCollections = remember {
-        listOf(
-            RecentCollectionData(101, "Rahul Kumar", "847291038", "₹ 12,750", "UPI - Google Pay", "04 Aug 2026", "REC-2026-801"),
-            RecentCollectionData(102, "Anita Das", "918237465", "₹ 18,200", "Net Banking (HDFC)", "04 Aug 2026", "REC-2026-802"),
-            RecentCollectionData(103, "Vikram Malhotra", "321654987", "₹ 32,000", "Cheque #40291", "02 Aug 2026", "REC-2026-803"),
-            RecentCollectionData(104, "Priya Verma", "543216879", "₹ 15,300", "Cash Receipt", "01 Aug 2026", "REC-2026-804"),
-            RecentCollectionData(105, "Meenakshi S.", "321456987", "₹ 11,200", "UPI - PhonePe", "30 Jul 2026", "REC-2026-805")
-        )
-    }
-
-    // Filtered lists based on search & empty state toggle
-    val filteredTopCustomers = remember(searchQuery, forceEmptyState) {
+    // Filtered Payments from DB
+    val filteredPayments = remember(livePayments, selectedFilter, searchQuery, paymentStatusFilter, paymentModeFilter, customStartDate, customEndDate, forceEmptyState) {
         if (forceEmptyState) emptyList()
-        else if (searchQuery.isBlank()) allTopCustomers
-        else allTopCustomers.filter {
-            SearchFilterEngine.matchesQuery(searchQuery, listOf(it.name, it.statusBadge, it.collectedAmount, it.outstandingAmount))
+        else {
+            livePayments.filter { payment ->
+                val matchesTime = isDateInPeriod(payment.paymentDate, selectedFilter, customStartDate, customEndDate)
+                val matchesMode = paymentModeFilter == "All" || payment.paymentMode.contains(paymentModeFilter, ignoreCase = true)
+                val matchesStatus = when (paymentStatusFilter) {
+                    "Paid" -> payment.paidAmount > 0
+                    "Partial" -> payment.paidAmount > 0 && payment.lateFee > 0
+                    "Pending" -> payment.paidAmount == 0.0
+                    "Overpaid" -> payment.paidAmount > 0
+                    else -> true
+                }
+                val matchesSearch = searchQuery.isBlank() || SearchFilterEngine.matchesQuery(
+                    searchQuery,
+                    listOf(payment.customerName, payment.policyNumber, payment.receiptNumber, payment.paymentMode, payment.paidAmount.toString(), payment.paymentDate)
+                )
+                matchesTime && matchesMode && matchesStatus && matchesSearch
+            }
         }
     }
 
-    val filteredRecentCollections = remember(searchQuery, forceEmptyState) {
+    // Filtered Policies from DB
+    val filteredPolicies = remember(livePolicies, policyStatusFilter, searchQuery, forceEmptyState) {
         if (forceEmptyState) emptyList()
-        else if (searchQuery.isBlank()) allRecentCollections
-        else allRecentCollections.filter {
-            SearchFilterEngine.matchesQuery(searchQuery, listOf(it.customerName, it.policyNumber, it.receiptNumber, it.paymentMode, it.premiumAmount))
+        else {
+            livePolicies.filter { policy ->
+                val matchesStatus = policyStatusFilter == "All" || policy.status.equals(policyStatusFilter, ignoreCase = true)
+                val matchesSearch = searchQuery.isBlank() || SearchFilterEngine.matchesQuery(
+                    searchQuery,
+                    listOf(policy.policyNumber, policy.customerName, policy.planName, policy.status, policy.premiumAmount.toString(), policy.dueDate)
+                )
+                matchesStatus && matchesSearch
+            }
         }
     }
 
-    val isListEmpty = forceEmptyState || (filteredTopCustomers.isEmpty() && filteredRecentCollections.isEmpty())
+    // Dynamic Financial Summary Calculations
+    val dynamicTotalCollected = remember(filteredPayments) {
+        filteredPayments.sumOf { it.paidAmount }
+    }
+
+    val dynamicTotalOutstanding = remember(filteredPolicies, filteredPayments) {
+        val paidMap = filteredPayments.groupBy { it.policyId }.mapValues { entry -> entry.value.sumOf { it.paidAmount } }
+        filteredPolicies.sumOf { pol ->
+            val paidForPol = paidMap[pol.id] ?: 0.0
+            if (pol.status.equals("Due", ignoreCase = true) || pol.status.equals("Lapsed", ignoreCase = true)) {
+                kotlin.math.max(0.0, pol.premiumAmount - paidForPol)
+            } else if (pol.status.equals("Active", ignoreCase = true) && pol.premiumAmount > paidForPol && paidForPol > 0) {
+                kotlin.math.max(0.0, pol.premiumAmount - paidForPol)
+            } else 0.0
+        }
+    }
+
+    val dynamicActiveCount = remember(filteredPolicies) { filteredPolicies.count { it.status.equals("Active", ignoreCase = true) } }
+    val dynamicDueCount = remember(filteredPolicies) { filteredPolicies.count { it.status.equals("Due", ignoreCase = true) || it.status.equals("Lapsed", ignoreCase = true) } }
+    val dynamicTotalPolicies = remember(filteredPolicies) { filteredPolicies.size }
+
+    val dynamicCollectionRate = remember(dynamicTotalCollected, dynamicTotalOutstanding) {
+        val targetDue = dynamicTotalCollected + dynamicTotalOutstanding
+        if (targetDue > 0) {
+            (dynamicTotalCollected / targetDue) * 100.0
+        } else if (dynamicTotalCollected > 0) 100.0 else 0.0
+    }
+
+    // Dynamic Top Customers List
+    val dynamicTopCustomers = remember(liveCustomers, livePolicies, filteredPayments, searchQuery, forceEmptyState) {
+        if (forceEmptyState) emptyList()
+        else if (liveCustomers.isEmpty() && livePayments.isEmpty()) {
+            emptyList()
+        } else {
+            val paymentsByCustomer = filteredPayments.groupBy { it.customerId }
+            val policiesByCustomer = livePolicies.groupBy { it.customerId }
+
+            val list = liveCustomers.map { customer ->
+                val custPayments = paymentsByCustomer[customer.id] ?: filteredPayments.filter { it.customerName.equals(customer.name, ignoreCase = true) }
+                val custPolicies = policiesByCustomer[customer.id] ?: livePolicies.filter { it.customerName.equals(customer.name, ignoreCase = true) }
+                val collected = custPayments.sumOf { it.paidAmount }
+                val outstanding = custPolicies.filter { it.status.equals("Due", ignoreCase = true) || it.status.equals("Lapsed", ignoreCase = true) }.sumOf { pol ->
+                    val paidForPol = custPayments.filter { it.policyId == pol.id }.sumOf { it.paidAmount }
+                    kotlin.math.max(0.0, pol.premiumAmount - paidForPol)
+                }
+                val initials = customer.name.split(" ")
+                    .mapNotNull { it.firstOrNull()?.toString() }
+                    .take(2).joinToString("").uppercase().ifEmpty { "CU" }
+
+                val badge = when {
+                    collected > 50000 -> "VIP Client"
+                    outstanding > 0 -> "Grace Period"
+                    else -> "On Time"
+                }
+                val badgeColor = when (badge) {
+                    "VIP Client" -> AccentAmber
+                    "Grace Period" -> AccentPurple
+                    else -> AccentGreen
+                }
+
+                TopCustomerData(
+                    id = customer.id.toInt(),
+                    name = customer.name,
+                    initials = initials,
+                    policyCount = custPolicies.size,
+                    collectedAmount = formatIndianCurrency(collected),
+                    outstandingAmount = formatIndianCurrency(outstanding),
+                    statusBadge = badge,
+                    badgeColor = badgeColor
+                )
+            }.filter { cust ->
+                searchQuery.isBlank() || SearchFilterEngine.matchesQuery(searchQuery, listOf(cust.name, cust.statusBadge, cust.collectedAmount, cust.outstandingAmount))
+            }.sortedByDescending { cust ->
+                cust.collectedAmount.replace("₹", "").replace(",", "").trim().toDoubleOrNull() ?: 0.0
+            }.take(5)
+
+            list
+        }
+    }
+
+    // Dynamic Recent Collections List
+    val dynamicRecentCollections = remember(filteredPayments, searchQuery, forceEmptyState) {
+        if (forceEmptyState) emptyList()
+        else {
+            filteredPayments.take(10).mapIndexed { idx, payment ->
+                RecentCollectionData(
+                    id = payment.id.toInt(),
+                    customerName = payment.customerName,
+                    policyNumber = payment.policyNumber,
+                    premiumAmount = formatIndianCurrency(payment.paidAmount),
+                    paymentMode = payment.paymentMode,
+                    collectedDate = payment.paymentDate,
+                    receiptNumber = payment.receiptNumber.ifBlank { "REC-2026-${100 + payment.id}" }
+                )
+            }
+        }
+    }
+
+    val isListEmpty = forceEmptyState || (dynamicTopCustomers.isEmpty() && dynamicRecentCollections.isEmpty())
 
     Scaffold(
         modifier = Modifier
@@ -234,18 +353,36 @@ fun ReportScreen(
                             Icon(
                                 imageVector = Icons.Default.FilterList,
                                 contentDescription = "Filter",
-                                tint = TextWhite
+                                tint = if (paymentStatusFilter != "All" || policyStatusFilter != "All" || paymentModeFilter != "All") RoyalBlueLight else TextWhite
                             )
                         }
 
-                        // Action 3: Export
+                        // Action 3: Share
                         IconButton(
-                            onClick = { showExportSheet = true },
+                            onClick = {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar("Generating report summary for sharing...")
+                                    val reportData = PdfReportData(
+                                        reportType = ReportType.MONTHLY_COLLECTION,
+                                        agentProfile = agentProfile,
+                                        customerList = liveCustomers,
+                                        policyList = filteredPolicies,
+                                        paymentList = filteredPayments,
+                                        filterPeriod = selectedFilter.label
+                                    )
+                                    val res = PdfReportGenerator.generatePdfReport(context, reportData)
+                                    res.onSuccess { file ->
+                                        PdfReportGenerator.sharePdf(context, file)
+                                    }.onFailure { err ->
+                                        snackbarHostState.showSnackbar("Failed to share report: ${err.message}")
+                                    }
+                                }
+                            },
                             modifier = Modifier.testTag("action_export")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.IosShare,
-                                contentDescription = "Export",
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share",
                                 tint = TextWhite
                             )
                         }
@@ -271,7 +408,7 @@ fun ReportScreen(
                                     .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Refresh Analytics", color = TextWhite) },
+                                    text = { Text("Refresh Data", color = TextWhite) },
                                     leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null, tint = RoyalBlueLight) },
                                     onClick = {
                                         showMoreMenu = false
@@ -283,19 +420,62 @@ fun ReportScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Toggle Empty State Demo", color = TextWhite) },
-                                    leadingIcon = { Icon(Icons.Default.FindInPage, contentDescription = null, tint = AccentAmber) },
+                                    text = { Text("Export PDF Report", color = TextWhite) },
+                                    leadingIcon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null, tint = AccentRed) },
                                     onClick = {
                                         showMoreMenu = false
-                                        forceEmptyState = !forceEmptyState
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Generating PDF report...")
+                                            val reportData = PdfReportData(
+                                                reportType = ReportType.MONTHLY_COLLECTION,
+                                                agentProfile = agentProfile,
+                                                customerList = liveCustomers,
+                                                policyList = filteredPolicies,
+                                                paymentList = filteredPayments,
+                                                filterPeriod = selectedFilter.label
+                                            )
+                                            val res = PdfReportGenerator.generatePdfReport(context, reportData)
+                                            res.onSuccess { file ->
+                                                snackbarHostState.showSnackbar("PDF Report Saved: ${file.name}")
+                                                PdfReportGenerator.openPdf(context, file)
+                                            }.onFailure { err ->
+                                                snackbarHostState.showSnackbar("Report Generation Failed: ${err.message}")
+                                            }
+                                        }
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Reset Filters", color = TextWhite) },
-                                    leadingIcon = { Icon(Icons.Default.RestartAlt, contentDescription = null, tint = AccentRed) },
+                                    text = { Text("Export Excel Spreadsheet", color = TextWhite) },
+                                    leadingIcon = { Icon(Icons.Default.GridOn, contentDescription = null, tint = AccentGreen) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar("Generating Excel report...")
+                                            val res = ExcelReportGenerator.generateExcelReport(
+                                                context = context,
+                                                filterPeriod = selectedFilter.label,
+                                                policies = filteredPolicies,
+                                                payments = filteredPayments,
+                                                customers = liveCustomers
+                                            )
+                                            res.onSuccess { file ->
+                                                snackbarHostState.showSnackbar("Excel Sheet Saved: ${file.name}")
+                                                ExcelReportGenerator.openExcelFile(context, file)
+                                            }.onFailure { err ->
+                                                snackbarHostState.showSnackbar("Excel Export Failed: ${err.message}")
+                                            }
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Reset All Filters", color = TextWhite) },
+                                    leadingIcon = { Icon(Icons.Default.RestartAlt, contentDescription = null, tint = AccentAmber) },
                                     onClick = {
                                         showMoreMenu = false
                                         searchQuery = ""
+                                        paymentStatusFilter = "All"
+                                        policyStatusFilter = "All"
+                                        paymentModeFilter = "All"
                                         forceEmptyState = false
                                         selectedFilter = ReportQuickFilter.THIS_MONTH
                                         coroutineScope.launch {
@@ -311,7 +491,45 @@ fun ReportScreen(
                     )
                 )
 
-                // Expandable Interactive Search Bar
+                // Navigation Tabs Bar (Requirement 9)
+                ScrollableTabRow(
+                    selectedTabIndex = 1,
+                    containerColor = DarkBg,
+                    contentColor = TextWhite,
+                    edgePadding = 12.dp,
+                    indicator = { tabPositions ->
+                        if (tabPositions.size > 1) {
+                            TabRowDefaults.SecondaryIndicator(
+                                Modifier.tabIndicatorOffset(tabPositions[1]),
+                                color = RoyalBlueLight,
+                                height = 3.dp
+                            )
+                        }
+                    }
+                ) {
+                    Tab(
+                        selected = false,
+                        onClick = onNavigateToPayments,
+                        text = { Text("Payments", color = TextMuted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                    )
+                    Tab(
+                        selected = true,
+                        onClick = onNavigateToReports,
+                        text = { Text("Reports & Analytics", color = RoyalBlueLight, fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                    )
+                    Tab(
+                        selected = false,
+                        onClick = onNavigateToDocuments,
+                        text = { Text("Documents", color = TextMuted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                    )
+                    Tab(
+                        selected = false,
+                        onClick = onNavigateToSettings,
+                        text = { Text("Profile & Settings", color = TextMuted, fontWeight = FontWeight.SemiBold, fontSize = 13.sp) }
+                    )
+                }
+
+                // Expandable Search Bar (Requirement 3)
                 AnimatedVisibility(
                     visible = isSearchActive,
                     enter = expandVertically() + fadeIn(),
@@ -320,7 +538,7 @@ fun ReportScreen(
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
-                        placeholder = { Text("Search customer, policy, receipt #...", color = TextMuted, fontSize = 13.sp) },
+                        placeholder = { Text("Search customer, policy #, mobile, receipt #...", color = TextMuted, fontSize = 13.sp) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = RoyalBlueLight) },
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
@@ -360,29 +578,29 @@ fun ReportScreen(
                         .navigationBarsPadding(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Export PDF Button
+                    // Export PDF Button (Requirement 7)
                     Button(
                         onClick = {
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Generating LIC PDF Report...")
                                 val reportType = when (selectedCardIndex) {
-                                    0 -> com.example.pdf.ReportType.MONTHLY_COLLECTION
-                                    1 -> com.example.pdf.ReportType.OUTSTANDING_PREMIUM
-                                    2 -> com.example.pdf.ReportType.COMPLETE_PORTFOLIO
-                                    else -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                    0 -> ReportType.MONTHLY_COLLECTION
+                                    1 -> ReportType.OUTSTANDING_PREMIUM
+                                    2 -> ReportType.COMPLETE_PORTFOLIO
+                                    else -> ReportType.MONTHLY_COLLECTION
                                 }
-                                val reportData = com.example.pdf.PdfReportData(
+                                val reportData = PdfReportData(
                                     reportType = reportType,
                                     agentProfile = agentProfile,
                                     customerList = liveCustomers,
-                                    policyList = livePolicies,
-                                    paymentList = livePayments,
+                                    policyList = filteredPolicies,
+                                    paymentList = filteredPayments,
                                     filterPeriod = selectedFilter.label
                                 )
-                                val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                val res = PdfReportGenerator.generatePdfReport(context, reportData)
                                 res.onSuccess { file ->
                                     snackbarHostState.showSnackbar("PDF Report Saved: ${file.name}")
-                                    com.example.pdf.PdfReportGenerator.openPdf(context, file)
+                                    PdfReportGenerator.openPdf(context, file)
                                 }.onFailure { err ->
                                     snackbarHostState.showSnackbar("Report Generation Failed: ${err.message}")
                                 }
@@ -399,11 +617,24 @@ fun ReportScreen(
                         Text("Export PDF", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp))
                     }
 
-                    // Export Excel Button
+                    // Export Excel Button (Requirement 8)
                     Button(
                         onClick = {
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Exporting data to Excel Spreadsheet...")
+                                val res = ExcelReportGenerator.generateExcelReport(
+                                    context = context,
+                                    filterPeriod = selectedFilter.label,
+                                    policies = filteredPolicies,
+                                    payments = filteredPayments,
+                                    customers = liveCustomers
+                                )
+                                res.onSuccess { file ->
+                                    snackbarHostState.showSnackbar("Excel Spreadsheet Saved: ${file.name}")
+                                    ExcelReportGenerator.openExcelFile(context, file)
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar("Excel Export Failed: ${err.message}")
+                                }
                             }
                         },
                         modifier = Modifier
@@ -417,28 +648,28 @@ fun ReportScreen(
                         Text("Export Excel", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, fontSize = 13.sp))
                     }
 
-                    // Share Report Button
+                    // Share Report Button (Requirement 5)
                     OutlinedButton(
                         onClick = {
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar("Preparing PDF report for sharing...")
                                 val reportType = when (selectedCardIndex) {
-                                    0 -> com.example.pdf.ReportType.MONTHLY_COLLECTION
-                                    1 -> com.example.pdf.ReportType.OUTSTANDING_PREMIUM
-                                    2 -> com.example.pdf.ReportType.COMPLETE_PORTFOLIO
-                                    else -> com.example.pdf.ReportType.MONTHLY_COLLECTION
+                                    0 -> ReportType.MONTHLY_COLLECTION
+                                    1 -> ReportType.OUTSTANDING_PREMIUM
+                                    2 -> ReportType.COMPLETE_PORTFOLIO
+                                    else -> ReportType.MONTHLY_COLLECTION
                                 }
-                                val reportData = com.example.pdf.PdfReportData(
+                                val reportData = PdfReportData(
                                     reportType = reportType,
                                     agentProfile = agentProfile,
                                     customerList = liveCustomers,
-                                    policyList = livePolicies,
-                                    paymentList = livePayments,
+                                    policyList = filteredPolicies,
+                                    paymentList = filteredPayments,
                                     filterPeriod = selectedFilter.label
                                 )
-                                val res = com.example.pdf.PdfReportGenerator.generatePdfReport(context, reportData)
+                                val res = PdfReportGenerator.generatePdfReport(context, reportData)
                                 res.onSuccess { file ->
-                                    com.example.pdf.PdfReportGenerator.sharePdf(context, file)
+                                    PdfReportGenerator.sharePdf(context, file)
                                 }.onFailure { err ->
                                     snackbarHostState.showSnackbar("Failed to share PDF: ${err.message}")
                                 }
@@ -466,39 +697,105 @@ fun ReportScreen(
         ) {
             val isTablet = maxWidth >= 600.dp
 
-            LazyColumn(
+            val scrollState = rememberScrollState()
+
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
+                    .verticalScroll(scrollState)
                     .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp)
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // ==========================================
-                // 1. DASHBOARD SUMMARY (4 PREMIUM CARDS)
+                // 1. FINANCIAL SUMMARY (4 DYNAMIC CARDS - Requirement 1 & 10)
                 // ==========================================
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = "FINANCIAL SUMMARY",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = RoyalBlueLight,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "FINANCIAL SUMMARY (${selectedFilter.label.uppercase()})",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = RoyalBlueLight,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
                         )
+                    )
 
-                        if (isTablet) {
-                            // 4 Column Row for Tablet
+                    val collectedText = formatIndianCurrency(dynamicTotalCollected)
+                    val outstandingText = formatIndianCurrency(dynamicTotalOutstanding)
+                    val rateText = String.format(Locale.US, "%.1f%%", dynamicCollectionRate)
+
+                    if (isTablet) {
+                        // 4 Column Row for Tablet
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            SummaryMetricCard(
+                                modifier = Modifier.weight(1f),
+                                title = "Total Collected",
+                                amount = collectedText,
+                                subtitle = "${filteredPayments.size} receipts collected",
+                                icon = Icons.Default.AccountBalanceWallet,
+                                iconColor = AccentGreen,
+                                isSelected = (selectedCardIndex == 0),
+                                onClick = {
+                                    selectedCardIndex = 0
+                                    selectedSummaryCardForDialog = 0
+                                }
+                            )
+                            SummaryMetricCard(
+                                modifier = Modifier.weight(1f),
+                                title = "Outstanding",
+                                amount = outstandingText,
+                                subtitle = "$dynamicDueCount policies pending",
+                                icon = Icons.Default.PendingActions,
+                                iconColor = AccentRed,
+                                isSelected = (selectedCardIndex == 1),
+                                onClick = {
+                                    selectedCardIndex = 1
+                                    selectedSummaryCardForDialog = 1
+                                }
+                            )
+                            SummaryMetricCard(
+                                modifier = Modifier.weight(1f),
+                                title = "Policies",
+                                amount = "$dynamicTotalPolicies",
+                                subtitle = "$dynamicActiveCount Active • $dynamicDueCount Due",
+                                icon = Icons.Default.Folder,
+                                iconColor = RoyalBlueLight,
+                                isSelected = (selectedCardIndex == 2),
+                                onClick = {
+                                    selectedCardIndex = 2
+                                    selectedSummaryCardForDialog = 2
+                                }
+                            )
+                            SummaryMetricCard(
+                                modifier = Modifier.weight(1f),
+                                title = "Collection Rate",
+                                amount = rateText,
+                                subtitle = "Target: 85.0% • Portfolio",
+                                icon = Icons.Default.Speed,
+                                iconColor = AccentAmber,
+                                isSelected = (selectedCardIndex == 3),
+                                onClick = {
+                                    selectedCardIndex = 3
+                                    selectedSummaryCardForDialog = 3
+                                }
+                            )
+                        }
+                    } else {
+                        // 2x2 Grid for Phone
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 SummaryMetricCard(
                                     modifier = Modifier.weight(1f),
-                                    title = "Total Premium Collected",
-                                    amount = if (forceEmptyState) "₹ 0" else "₹ 2,85,400",
-                                    subtitle = "+14.2% vs last month",
+                                    title = "Total Collected",
+                                    amount = collectedText,
+                                    subtitle = "${filteredPayments.size} receipts collected",
                                     icon = Icons.Default.AccountBalanceWallet,
                                     iconColor = AccentGreen,
                                     isSelected = (selectedCardIndex == 0),
@@ -509,9 +806,9 @@ fun ReportScreen(
                                 )
                                 SummaryMetricCard(
                                     modifier = Modifier.weight(1f),
-                                    title = "Outstanding Premium",
-                                    amount = if (forceEmptyState) "₹ 0" else "₹ 64,200",
-                                    subtitle = "12 policies pending",
+                                    title = "Outstanding",
+                                    amount = outstandingText,
+                                    subtitle = "$dynamicDueCount policies pending",
                                     icon = Icons.Default.PendingActions,
                                     iconColor = AccentRed,
                                     isSelected = (selectedCardIndex == 1),
@@ -520,11 +817,16 @@ fun ReportScreen(
                                         selectedSummaryCardForDialog = 1
                                     }
                                 )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
                                 SummaryMetricCard(
                                     modifier = Modifier.weight(1f),
                                     title = "Policies",
-                                    amount = if (forceEmptyState) "0" else "128",
-                                    subtitle = "112 Active • 16 Due",
+                                    amount = "$dynamicTotalPolicies",
+                                    subtitle = "$dynamicActiveCount Active • $dynamicDueCount Due",
                                     icon = Icons.Default.Folder,
                                     iconColor = RoyalBlueLight,
                                     isSelected = (selectedCardIndex == 2),
@@ -536,8 +838,8 @@ fun ReportScreen(
                                 SummaryMetricCard(
                                     modifier = Modifier.weight(1f),
                                     title = "Collection Rate",
-                                    amount = if (forceEmptyState) "0%" else "81.6%",
-                                    subtitle = "Target: 85.0%",
+                                    amount = rateText,
+                                    subtitle = "Target: 85.0% • Portfolio",
                                     icon = Icons.Default.Speed,
                                     iconColor = AccentAmber,
                                     isSelected = (selectedCardIndex == 3),
@@ -547,276 +849,198 @@ fun ReportScreen(
                                     }
                                 )
                             }
-                        } else {
-                            // 2x2 Grid for Phone
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    SummaryMetricCard(
-                                        modifier = Modifier.weight(1f),
-                                        title = "Total Collected",
-                                        amount = if (forceEmptyState) "₹ 0" else "₹ 2,85,400",
-                                        subtitle = "+14.2% vs prev month",
-                                        icon = Icons.Default.AccountBalanceWallet,
-                                        iconColor = AccentGreen,
-                                        isSelected = (selectedCardIndex == 0),
-                                        onClick = {
-                                            selectedCardIndex = 0
-                                            coroutineScope.launch { snackbarHostState.showSnackbar("Filtering by Collected Premium records.") }
-                                        }
-                                    )
-                                    SummaryMetricCard(
-                                        modifier = Modifier.weight(1f),
-                                        title = "Outstanding",
-                                        amount = if (forceEmptyState) "₹ 0" else "₹ 64,200",
-                                        subtitle = "12 policies pending",
-                                        icon = Icons.Default.PendingActions,
-                                        iconColor = AccentRed,
-                                        isSelected = (selectedCardIndex == 1),
-                                        onClick = {
-                                            selectedCardIndex = 1
-                                            coroutineScope.launch { snackbarHostState.showSnackbar("Filtering by Outstanding Premium policies.") }
-                                        }
-                                    )
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    SummaryMetricCard(
-                                        modifier = Modifier.weight(1f),
-                                        title = "Policies",
-                                        amount = if (forceEmptyState) "0" else "128",
-                                        subtitle = "112 Active • 16 Due",
-                                        icon = Icons.Default.Folder,
-                                        iconColor = RoyalBlueLight,
-                                        isSelected = (selectedCardIndex == 2),
-                                        onClick = {
-                                            selectedCardIndex = 2
-                                            coroutineScope.launch { snackbarHostState.showSnackbar("Viewing all active policy portfolios.") }
-                                        }
-                                    )
-                                    SummaryMetricCard(
-                                        modifier = Modifier.weight(1f),
-                                        title = "Collection Rate",
-                                        amount = if (forceEmptyState) "0%" else "81.6%",
-                                        subtitle = "Target: 85.0%",
-                                        icon = Icons.Default.Speed,
-                                        iconColor = AccentAmber,
-                                        isSelected = (selectedCardIndex == 3),
-                                        onClick = {
-                                            selectedCardIndex = 3
-                                            coroutineScope.launch { snackbarHostState.showSnackbar("Target performance progress rate: 81.6%") }
-                                        }
-                                    )
-                                }
-                            }
                         }
                     }
                 }
 
                 // ==========================================
-                // 2. QUICK FILTERS
+                // 2. QUICK FILTERS (Requirement 2)
                 // ==========================================
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "QUICK FILTERS",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                color = TextMuted,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp
-                            )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "QUICK FILTERS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = TextMuted,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
                         )
+                    )
 
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            items(ReportQuickFilter.entries) { filter ->
-                                val isSelected = (selectedFilter == filter)
-                                Surface(
-                                    onClick = {
-                                        selectedFilter = filter
-                                        if (filter == ReportQuickFilter.CUSTOM_DATE) {
-                                            showCustomDateDialog = true
-                                        }
-                                    },
-                                    color = if (isSelected) RoyalBluePrimary else CardBg,
-                                    shape = RoundedCornerShape(12.dp),
-                                    border = BorderStroke(
-                                        1.dp,
-                                        if (isSelected) RoyalBlueLight else CardBorder
-                                    )
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = null,
-                                                tint = TextWhite,
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                        }
-                                        Text(
-                                            text = filter.label,
-                                            style = MaterialTheme.typography.labelMedium.copy(
-                                                color = if (isSelected) TextWhite else TextMuted,
-                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ==========================================
-                // 3. CHARTS SECTION (3 MATERIAL CANVAS CHARTS)
-                // ==========================================
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "ANALYTICS & CHARTS",
-                                style = MaterialTheme.typography.labelSmall.copy(
-                                    color = RoyalBlueLight,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp
-                                )
-                            )
-
-                            IconButton(
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(ReportQuickFilter.entries) { filter ->
+                            val isSelected = (selectedFilter == filter)
+                            Surface(
                                 onClick = {
-                                    isChartAnimTriggered = false
-                                    coroutineScope.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        isChartAnimTriggered = true
+                                    selectedFilter = filter
+                                    if (filter == ReportQuickFilter.CUSTOM_DATE) {
+                                        showCustomDateDialog = true
                                     }
                                 },
-                                modifier = Modifier.size(28.dp)
+                                color = if (isSelected) RoyalBluePrimary else CardBg,
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isSelected) RoyalBlueLight else CardBorder
+                                )
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Autorenew,
-                                    contentDescription = "Re-animate Charts",
-                                    tint = RoyalBlueLight,
-                                    modifier = Modifier.size(16.dp)
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = TextWhite,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = filter.label,
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            color = if (isSelected) TextWhite else TextMuted,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    )
+                                }
                             }
-                        }
-
-                        if (isTablet) {
-                            // Side by side charts for tablet
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                MonthlyLineChartCard(
-                                    modifier = Modifier.weight(1.2f),
-                                    progress = chartAnimProgress,
-                                    isEmpty = forceEmptyState
-                                )
-                                PlanDonutChartCard(
-                                    modifier = Modifier.weight(1f),
-                                    progress = chartAnimProgress,
-                                    isEmpty = forceEmptyState
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            StatusBarChartCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                progress = chartAnimProgress,
-                                isEmpty = forceEmptyState
-                            )
-                        } else {
-                            // Stacked charts for phone
-                            MonthlyLineChartCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                progress = chartAnimProgress,
-                                isEmpty = forceEmptyState
-                            )
-
-                            PlanDonutChartCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                progress = chartAnimProgress,
-                                isEmpty = forceEmptyState
-                            )
-
-                            StatusBarChartCard(
-                                modifier = Modifier.fillMaxWidth(),
-                                progress = chartAnimProgress,
-                                isEmpty = forceEmptyState
-                            )
                         }
                     }
+                }
+
+                // ==========================================
+                // 3. CHARTS SECTION
+                // ==========================================
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ANALYTICS & CHARTS",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = RoyalBlueLight,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    )
+
+                    IconButton(
+                        onClick = {
+                            isChartAnimTriggered = false
+                            coroutineScope.launch {
+                                kotlinx.coroutines.delay(100)
+                                isChartAnimTriggered = true
+                            }
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Autorenew,
+                            contentDescription = "Re-animate Charts",
+                            tint = RoyalBlueLight,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                if (isTablet) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        MonthlyLineChartCard(
+                            modifier = Modifier.weight(1.2f),
+                            progress = chartAnimProgress,
+                            isEmpty = isListEmpty
+                        )
+                        PlanDonutChartCard(
+                            modifier = Modifier.weight(1f),
+                            progress = chartAnimProgress,
+                            isEmpty = isListEmpty
+                        )
+                    }
+
+                    StatusBarChartCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        progress = chartAnimProgress,
+                        isEmpty = isListEmpty
+                    )
+                } else {
+                    MonthlyLineChartCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        progress = chartAnimProgress,
+                        isEmpty = isListEmpty
+                    )
+
+                    PlanDonutChartCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        progress = chartAnimProgress,
+                        isEmpty = isListEmpty
+                    )
+
+                    StatusBarChartCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        progress = chartAnimProgress,
+                        isEmpty = isListEmpty
+                    )
                 }
 
                 // ==========================================
                 // 4. TOP CUSTOMERS SECTION
                 // ==========================================
-                item {
-                    Surface(
-                        color = CardBg,
-                        shape = RoundedCornerShape(20.dp),
-                        border = BorderStroke(1.dp, CardBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Groups,
-                                        contentDescription = null,
-                                        tint = RoyalBlueLight,
-                                        modifier = Modifier.size(20.dp)
+                Surface(
+                    color = CardBg,
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Groups,
+                                    contentDescription = null,
+                                    tint = RoyalBlueLight,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Top Customers by Volume",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        color = TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Top Customers by Volume",
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            color = TextWhite,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
-                                        )
-                                    )
-                                }
-
-                                TextButton(onClick = { onNavigateToCustomers() }) {
-                                    Text("View All", color = RoyalBlueLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                                )
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            TextButton(onClick = { onNavigateToCustomers() }) {
+                                Text("View All", color = RoyalBlueLight, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
 
-                            if (filteredTopCustomers.isEmpty()) {
-                                EmptyInlineState(message = "No matching top customer records found.")
-                            } else {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    filteredTopCustomers.forEach { customer ->
-                                        TopCustomerRowItem(
-                                            customer = customer,
-                                            onClick = {
-                                                selectedCustomerForDialog = customer
-                                            }
-                                        )
-                                    }
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (dynamicTopCustomers.isEmpty()) {
+                            EmptyInlineState(message = "No matching customer records found.")
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                dynamicTopCustomers.forEach { customer ->
+                                    TopCustomerRowItem(
+                                        customer = customer,
+                                        onClick = {
+                                            selectedCustomerForDialog = customer
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -826,57 +1050,55 @@ fun ReportScreen(
                 // ==========================================
                 // 5. RECENT COLLECTIONS SECTION
                 // ==========================================
-                item {
-                    Surface(
-                        color = CardBg,
-                        shape = RoundedCornerShape(20.dp),
-                        border = BorderStroke(1.dp, CardBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.ReceiptLong,
-                                        contentDescription = null,
-                                        tint = AccentGreen,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "Recent Collections",
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            color = TextWhite,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
-                                        )
-                                    )
-                                }
-
+                Surface(
+                    color = CardBg,
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.ReceiptLong,
+                                    contentDescription = null,
+                                    tint = AccentGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "${filteredRecentCollections.size} Records",
-                                    style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 12.sp)
+                                    text = "Recent Collections",
+                                    style = MaterialTheme.typography.titleMedium.copy(
+                                        color = TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "${dynamicRecentCollections.size} Records",
+                                style = MaterialTheme.typography.labelSmall.copy(color = TextMuted, fontSize = 12.sp)
+                            )
+                        }
 
-                            if (filteredRecentCollections.isEmpty()) {
-                                EmptyInlineState(message = "No recent premium collection receipts found.")
-                            } else {
-                                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    filteredRecentCollections.forEach { collection ->
-                                        RecentCollectionRowItem(
-                                            collection = collection,
-                                            onReceiptClick = {
-                                                selectedReceiptForDialog = collection
-                                            }
-                                        )
-                                    }
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        if (dynamicRecentCollections.isEmpty()) {
+                            EmptyInlineState(message = "No recent premium collection receipts found.")
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                dynamicRecentCollections.forEach { collection ->
+                                    RecentCollectionRowItem(
+                                        collection = collection,
+                                        onReceiptClick = {
+                                            selectedReceiptForDialog = collection
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -886,147 +1108,134 @@ fun ReportScreen(
                 // ==========================================
                 // 6. INSIGHTS SECTION
                 // ==========================================
-                item {
+                Surface(
+                    color = CardBg,
+                    shape = RoundedCornerShape(20.dp),
+                    border = BorderStroke(1.dp, CardBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Lightbulb,
+                                contentDescription = null,
+                                tint = AccentAmber,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Smart Financial Insights",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    color = TextWhite,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            InsightRowItem(
+                                label = "Period Collection Volume",
+                                value = formatIndianCurrency(dynamicTotalCollected),
+                                subtitle = "Total verified payments received",
+                                icon = Icons.Default.ShowChart,
+                                iconColor = AccentGreen
+                            )
+                            InsightRowItem(
+                                label = "Outstanding Portfolio Due",
+                                value = formatIndianCurrency(dynamicTotalOutstanding),
+                                subtitle = "$dynamicDueCount policies pending renewal",
+                                icon = Icons.Default.PendingActions,
+                                iconColor = AccentRed
+                            )
+                            InsightRowItem(
+                                label = "Collection Efficiency Rate",
+                                value = String.format(Locale.US, "%.1f%%", dynamicCollectionRate),
+                                subtitle = if (dynamicCollectionRate >= 80.0) "Optimal performance target achieved" else "Requires agent renewal follow-ups",
+                                icon = Icons.Default.Speed,
+                                iconColor = AccentAmber
+                            )
+                        }
+                    }
+                }
+
+                // ==========================================
+                // 7. EMPTY STATE DISPLAY
+                // ==========================================
+                if (isListEmpty) {
                     Surface(
                         color = CardBg,
                         shape = RoundedCornerShape(20.dp),
                         border = BorderStroke(1.dp, CardBorder),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Lightbulb,
-                                    contentDescription = null,
-                                    tint = AccentAmber,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "Smart Financial Insights",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        color = TextWhite,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                InsightRowItem(
-                                    label = "Highest Collection Month",
-                                    value = if (forceEmptyState) "N/A" else "March 2026 — ₹ 4,20,000",
-                                    subtitle = "Peak financial year renewal cycle",
-                                    icon = Icons.Default.ShowChart,
-                                    iconColor = AccentGreen
-                                )
-                                InsightRowItem(
-                                    label = "Lowest Collection Month",
-                                    value = if (forceEmptyState) "N/A" else "November 2025 — ₹ 1,15,000",
-                                    subtitle = "Diwali seasonal slowdown",
-                                    icon = Icons.Default.TrendingDown,
-                                    iconColor = AccentRed
-                                )
-                                InsightRowItem(
-                                    label = "Best Selling Plan",
-                                    value = if (forceEmptyState) "N/A" else "Jeevan Umang (Plan 945)",
-                                    subtitle = "42% of total portfolio revenue",
-                                    icon = Icons.Default.WorkspacePremium,
-                                    iconColor = AccentAmber
-                                )
-                                InsightRowItem(
-                                    label = "Pending Premium Volume",
-                                    value = if (forceEmptyState) "₹ 0" else "₹ 38,400",
-                                    subtitle = "8 policies currently in grace period",
-                                    icon = Icons.Default.HourglassTop,
-                                    iconColor = RoyalBlueLight
-                                )
-                                InsightRowItem(
-                                    label = "Overdue Premium Volume",
-                                    value = if (forceEmptyState) "₹ 0" else "₹ 25,800",
-                                    subtitle = "4 policies requiring urgent follow-up",
-                                    icon = Icons.Default.Warning,
-                                    iconColor = AccentRed
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // ==========================================
-                // 7. EMPTY STATE DISPLAY (IF FORCE TOGGLED OR NO RESULTS)
-                // ==========================================
-                if (isListEmpty) {
-                    item {
-                        Surface(
-                            color = CardBg,
-                            shape = RoundedCornerShape(20.dp),
-                            border = BorderStroke(1.dp, CardBorder),
-                            modifier = Modifier.fillMaxWidth()
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                            Canvas(modifier = Modifier.size(80.dp)) {
+                                drawCircle(
+                                    color = RoyalBluePrimary.copy(alpha = 0.15f),
+                                    radius = size.minDimension / 2
+                                )
+                                drawCircle(
+                                    color = RoyalBlueLight.copy(alpha = 0.3f),
+                                    radius = size.minDimension / 3,
+                                    style = Stroke(width = 3.dp.toPx())
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            Text(
+                                text = "No matching records",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    color = TextWhite,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 18.sp
+                                )
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Text(
+                                text = "There are no policy collection records matching your active search query or date filter.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = TextMuted,
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            )
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            OutlinedButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    paymentStatusFilter = "All"
+                                    policyStatusFilter = "All"
+                                    paymentModeFilter = "All"
+                                    forceEmptyState = false
+                                    selectedFilter = ReportQuickFilter.THIS_MONTH
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, RoyalBlueLight)
                             ) {
-                                // Illustration Placeholder
-                                Canvas(modifier = Modifier.size(80.dp)) {
-                                    drawCircle(
-                                        color = RoyalBluePrimary.copy(alpha = 0.15f),
-                                        radius = size.minDimension / 2
-                                    )
-                                    drawCircle(
-                                        color = RoyalBlueLight.copy(alpha = 0.3f),
-                                        radius = size.minDimension / 3,
-                                        style = Stroke(width = 3.dp.toPx())
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Text(
-                                    text = "No reports available",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        color = TextWhite,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 18.sp
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(6.dp))
-
-                                Text(
-                                    text = "There are no policy collection records matching your active search query or date filter.",
-                                    style = MaterialTheme.typography.bodySmall.copy(
-                                        color = TextMuted,
-                                        fontSize = 13.sp,
-                                        textAlign = TextAlign.Center
-                                    )
-                                )
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                OutlinedButton(
-                                    onClick = {
-                                        searchQuery = ""
-                                        forceEmptyState = false
-                                        selectedFilter = ReportQuickFilter.THIS_MONTH
-                                    },
-                                    shape = RoundedCornerShape(12.dp),
-                                    border = BorderStroke(1.dp, RoyalBlueLight)
-                                ) {
-                                    Icon(Icons.Default.RestartAlt, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Reset Filters", color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                }
+                                Icon(Icons.Default.RestartAlt, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Reset Filters", color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
+
+                // Bottom spacer to ensure last item can scroll comfortably above sticky bottom bar
+                Spacer(modifier = Modifier.height(140.dp))
             }
         }
     }
@@ -1046,7 +1255,7 @@ fun ReportScreen(
                     OutlinedTextField(
                         value = customStartDate,
                         onValueChange = { customStartDate = it },
-                        label = { Text("Start Date", color = TextMuted) },
+                        label = { Text("Start Date (e.g. 01 Aug 2026)", color = TextMuted) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
@@ -1059,7 +1268,7 @@ fun ReportScreen(
                     OutlinedTextField(
                         value = customEndDate,
                         onValueChange = { customEndDate = it },
-                        label = { Text("End Date", color = TextMuted) },
+                        label = { Text("End Date (e.g. 31 Aug 2026)", color = TextMuted) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
@@ -1123,7 +1332,24 @@ fun ReportScreen(
                     Surface(
                         onClick = {
                             showExportSheet = false
-                            coroutineScope.launch { snackbarHostState.showSnackbar("PDF Executive Summary downloaded.") }
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Generating PDF report...")
+                                val reportData = PdfReportData(
+                                    reportType = ReportType.MONTHLY_COLLECTION,
+                                    agentProfile = agentProfile,
+                                    customerList = liveCustomers,
+                                    policyList = filteredPolicies,
+                                    paymentList = filteredPayments,
+                                    filterPeriod = selectedFilter.label
+                                )
+                                val res = PdfReportGenerator.generatePdfReport(context, reportData)
+                                res.onSuccess { file ->
+                                    snackbarHostState.showSnackbar("PDF Report Saved: ${file.name}")
+                                    PdfReportGenerator.openPdf(context, file)
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar("Failed: ${err.message}")
+                                }
+                            }
                         },
                         color = DarkBg,
                         shape = RoundedCornerShape(14.dp),
@@ -1143,7 +1369,22 @@ fun ReportScreen(
                     Surface(
                         onClick = {
                             showExportSheet = false
-                            coroutineScope.launch { snackbarHostState.showSnackbar("Excel Spreadsheet exported to Downloads.") }
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Exporting Excel Spreadsheet...")
+                                val res = ExcelReportGenerator.generateExcelReport(
+                                    context = context,
+                                    filterPeriod = selectedFilter.label,
+                                    policies = filteredPolicies,
+                                    payments = filteredPayments,
+                                    customers = liveCustomers
+                                )
+                                res.onSuccess { file ->
+                                    snackbarHostState.showSnackbar("Excel Sheet Saved: ${file.name}")
+                                    ExcelReportGenerator.openExcelFile(context, file)
+                                }.onFailure { err ->
+                                    snackbarHostState.showSnackbar("Failed: ${err.message}")
+                                }
+                            }
                         },
                         color = DarkBg,
                         shape = RoundedCornerShape(14.dp),
@@ -1166,7 +1407,7 @@ fun ReportScreen(
         }
     }
 
-    // Filter Options Bottom Sheet
+    // Filter Options Bottom Sheet Panel (Requirement 4)
     if (showFilterSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFilterSheet = false },
@@ -1179,10 +1420,24 @@ fun ReportScreen(
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    text = "Filter Analytics",
-                    style = MaterialTheme.typography.titleMedium.copy(color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Filter Analytics & Reports",
+                        style = MaterialTheme.typography.titleMedium.copy(color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    )
+                    TextButton(onClick = {
+                        paymentStatusFilter = "All"
+                        policyStatusFilter = "All"
+                        paymentModeFilter = "All"
+                        selectedFilter = ReportQuickFilter.THIS_MONTH
+                    }) {
+                        Text("Reset", color = RoyalBlueLight, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
 
                 Text("Quick Time Period", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                 Row(
@@ -1194,7 +1449,6 @@ fun ReportScreen(
                         Surface(
                             onClick = {
                                 selectedFilter = filter
-                                showFilterSheet = false
                             },
                             color = if (isSelected) RoyalBluePrimary else DarkBg,
                             shape = RoundedCornerShape(10.dp),
@@ -1213,19 +1467,63 @@ fun ReportScreen(
                     }
                 }
 
+                Text("Payment Status", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("All", "Paid", "Partial", "Pending")) { status ->
+                        val isSelected = paymentStatusFilter == status
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { paymentStatusFilter = status },
+                            label = { Text(status, color = TextWhite) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = RoyalBluePrimary,
+                                containerColor = DarkBg
+                            )
+                        )
+                    }
+                }
+
+                Text("Policy Status", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("All", "Active", "Due", "Lapsed")) { status ->
+                        val isSelected = policyStatusFilter == status
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { policyStatusFilter = status },
+                            label = { Text(status, color = TextWhite) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = RoyalBluePrimary,
+                                containerColor = DarkBg
+                            )
+                        )
+                    }
+                }
+
+                Text("Payment Mode", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(listOf("All", "Cash", "UPI", "Bank", "Cheque")) { mode ->
+                        val isSelected = paymentModeFilter == mode
+                        FilterChip(
+                            selected = isSelected,
+                            onClick = { paymentModeFilter = mode },
+                            label = { Text(mode, color = TextWhite) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = RoyalBluePrimary,
+                                containerColor = DarkBg
+                            )
+                        )
+                    }
+                }
+
                 Button(
                     onClick = {
                         showFilterSheet = false
-                        showCustomDateDialog = true
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkBg),
-                    border = BorderStroke(1.dp, RoyalBlueLight),
+                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(Icons.Default.DateRange, contentDescription = null, tint = RoyalBlueLight, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Select Custom Date Range ($customStartDate - $customEndDate)", color = TextWhite, fontSize = 13.sp)
+                    Text("Apply Filters", color = TextWhite, fontWeight = FontWeight.Bold)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -1233,47 +1531,216 @@ fun ReportScreen(
         }
     }
 
-    // Summary Metric Detail Dialog
+    // Detailed Dialogs for Financial Summary Cards (Requirement 1)
     selectedSummaryCardForDialog?.let { cardIndex ->
-        val titles = listOf("Total Premium Collected", "Outstanding Premium", "Policy Portfolio", "Collection Rate Target")
-        val amounts = listOf("₹ 2,85,400", "₹ 64,200", "128 Policies", "81.6%")
-        val title = titles.getOrElse(cardIndex) { "Metric Report" }
-        val amount = amounts.getOrElse(cardIndex) { "N/A" }
+        when (cardIndex) {
+            // 0: Total Collected Report
+            0 -> {
+                AlertDialog(
+                    onDismissRequest = { selectedSummaryCardForDialog = null },
+                    containerColor = CardBg,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = AccentGreen)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Total Collection Report", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Total Collected: ${formatIndianCurrency(dynamicTotalCollected)}", color = AccentGreen, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("Period: ${selectedFilter.label} (${filteredPayments.size} receipts)", color = TextMuted, fontSize = 13.sp)
 
-        AlertDialog(
-            onDismissRequest = { selectedSummaryCardForDialog = null },
-            containerColor = CardBg,
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Analytics, contentDescription = null, tint = RoyalBlueLight)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(title, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Current Value: $amount", color = RoyalBlueLight, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                    Text("Detailed audit trail breakdown for the selected period:", color = TextMuted, fontSize = 13.sp)
-
-                    Surface(color = DarkBg, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("• Total Operations: 142 transactions", color = TextWhite, fontSize = 12.5.sp)
-                            Text("• Digital Verification: 100% Validated", color = AccentGreen, fontSize = 12.5.sp)
-                            Text("• Grace Period Remaining: 15 Days", color = AccentAmber, fontSize = 12.5.sp)
+                            Surface(color = DarkBg, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                                if (filteredPayments.isEmpty()) {
+                                    Box(modifier = Modifier.padding(16.dp), contentAlignment = Alignment.Center) {
+                                        Text("No payment records found for this period.", color = TextMuted, fontSize = 12.5.sp)
+                                    }
+                                } else {
+                                    LazyColumn(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        items(filteredPayments) { pay ->
+                                            Column(modifier = Modifier.fillMaxWidth().background(CardBg, RoundedCornerShape(8.dp)).padding(8.dp)) {
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text(pay.customerName, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                    Text(formatIndianCurrency(pay.paidAmount), color = AccentGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                }
+                                                Text("Policy: ${pay.policyNumber} • Mode: ${pay.paymentMode}", color = TextMuted, fontSize = 11.5.sp)
+                                                Text("Date: ${pay.paymentDate} • Receipt: ${pay.receiptNumber}", color = RoyalBlueLight, fontSize = 10.5.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = { selectedSummaryCardForDialog = null },
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Close", color = TextWhite, fontWeight = FontWeight.Bold)
                         }
                     }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = { selectedSummaryCardForDialog = null },
-                    colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Text("Close Report", color = TextWhite, fontWeight = FontWeight.Bold)
-                }
+                )
             }
-        )
+
+            // 1: Outstanding Premiums Report
+            1 -> {
+                AlertDialog(
+                    onDismissRequest = { selectedSummaryCardForDialog = null },
+                    containerColor = CardBg,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.PendingActions, contentDescription = null, tint = AccentRed)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Outstanding Premiums", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Total Outstanding: ${formatIndianCurrency(dynamicTotalOutstanding)}", color = AccentRed, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("$dynamicDueCount policies pending payment", color = TextMuted, fontSize = 13.sp)
+
+                            Surface(color = DarkBg, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+                                val outstandingList = filteredPolicies.filter { it.status.equals("Due", ignoreCase = true) || it.status.equals("Lapsed", ignoreCase = true) }
+                                if (outstandingList.isEmpty()) {
+                                    Box(modifier = Modifier.padding(16.dp), contentAlignment = Alignment.Center) {
+                                        Text("No outstanding policies found.", color = TextMuted, fontSize = 12.5.sp)
+                                    }
+                                } else {
+                                    LazyColumn(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        items(outstandingList) { pol ->
+                                            Column(modifier = Modifier.fillMaxWidth().background(CardBg, RoundedCornerShape(8.dp)).padding(8.dp)) {
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                                    Text(pol.customerName, color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                    Text(formatIndianCurrency(pol.premiumAmount), color = AccentRed, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                                }
+                                                Text("Policy: ${pol.policyNumber} • Plan: ${pol.planName}", color = TextMuted, fontSize = 11.5.sp)
+                                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                                    Text("Due Date: ${pol.dueDate}", color = AccentAmber, fontSize = 11.sp)
+                                                    TextButton(
+                                                        onClick = {
+                                                            selectedSummaryCardForDialog = null
+                                                            val customer = liveCustomers.find { it.id == pol.customerId }
+                                                            val mobile = customer?.mobile ?: ""
+                                                            val msg = com.example.whatsapp.WhatsAppAutomation.generateMessage(
+                                                                context = context,
+                                                                templateType = WhatsAppTemplateType.OVERDUE,
+                                                                customerName = pol.customerName,
+                                                                policyNumber = pol.policyNumber,
+                                                                planName = pol.planName,
+                                                                premiumAmount = pol.premiumAmount,
+                                                                dueDate = pol.dueDate
+                                                            )
+                                                            com.example.whatsapp.WhatsAppAutomation.sendWhatsAppReminder(context, mobile, msg)
+                                                        },
+                                                        contentPadding = PaddingValues(0.dp)
+                                                    ) {
+                                                        Text("Remind", color = RoyalBlueLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = { selectedSummaryCardForDialog = null },
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Close", color = TextWhite, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                )
+            }
+
+            // 2: Policy Summary Report
+            2 -> {
+                AlertDialog(
+                    onDismissRequest = { selectedSummaryCardForDialog = null },
+                    containerColor = CardBg,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Folder, contentDescription = null, tint = RoyalBlueLight)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Policy Summary", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Total Policies: $dynamicTotalPolicies", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Active: $dynamicActiveCount", color = AccentGreen, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                                Text("Due / Pending: $dynamicDueCount", color = AccentAmber, fontWeight = FontWeight.Bold, fontSize = 13.5.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    selectedSummaryCardForDialog = null
+                                    onNavigateToPolicies()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Open Policy List Screen", color = TextWhite, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { selectedSummaryCardForDialog = null }) {
+                            Text("Close", color = TextMuted)
+                        }
+                    }
+                )
+            }
+
+            // 3: Collection Rate Details
+            3 -> {
+                AlertDialog(
+                    onDismissRequest = { selectedSummaryCardForDialog = null },
+                    containerColor = CardBg,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Speed, contentDescription = null, tint = AccentAmber)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Collection Rate Details", color = TextWhite, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        }
+                    },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Collection Efficiency: ${String.format(Locale.US, "%.1f%%", dynamicCollectionRate)}", color = AccentAmber, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("Calculation Formula:", color = TextMuted, fontSize = 13.sp)
+
+                            Surface(color = DarkBg, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text("• Total Collected: ${formatIndianCurrency(dynamicTotalCollected)}", color = AccentGreen, fontSize = 12.5.sp)
+                                    Text("• Total Outstanding: ${formatIndianCurrency(dynamicTotalOutstanding)}", color = AccentRed, fontSize = 12.5.sp)
+                                    Text("• Total Target Due: ${formatIndianCurrency(dynamicTotalCollected + dynamicTotalOutstanding)}", color = TextWhite, fontSize = 12.5.sp)
+                                    Text("• Rate = (Collected / Target) × 100", color = RoyalBlueLight, fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = { selectedSummaryCardForDialog = null },
+                            colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Close", color = TextWhite, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                )
+            }
+        }
     }
 
     // Customer Details Dialog
@@ -1398,8 +1865,60 @@ fun ReportScreen(
 }
 
 // ---------------------------------------------------------------------------
-// HELPER COMPOSABLES & CHARTS
+// HELPER FUNCTIONS & COMPOSABLES
 // ---------------------------------------------------------------------------
+
+private fun isDateInPeriod(
+    dateStr: String,
+    filter: ReportQuickFilter,
+    customStart: String,
+    customEnd: String
+): Boolean {
+    if (dateStr.isBlank()) return true
+    val today = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    val currentYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
+    val currentMonth = SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(Date())
+
+    return when (filter) {
+        ReportQuickFilter.TODAY -> dateStr.startsWith(today) || dateStr.equals(today, ignoreCase = true)
+        ReportQuickFilter.THIS_WEEK -> {
+            try {
+                val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val date = sdf.parse(dateStr)
+                val calNow = Calendar.getInstance()
+                val calDate = Calendar.getInstance()
+                if (date != null) {
+                    calDate.time = date
+                    val diffDays = (calNow.timeInMillis - calDate.timeInMillis) / (24 * 60 * 60 * 1000)
+                    diffDays in -1..7 || (calNow.get(Calendar.WEEK_OF_YEAR) == calDate.get(Calendar.WEEK_OF_YEAR) && calNow.get(Calendar.YEAR) == calDate.get(Calendar.YEAR))
+                } else true
+            } catch (e: Exception) {
+                true
+            }
+        }
+        ReportQuickFilter.THIS_MONTH -> dateStr.startsWith(currentMonth)
+        ReportQuickFilter.THIS_YEAR -> dateStr.startsWith(currentYear)
+        ReportQuickFilter.CUSTOM_DATE -> {
+            try {
+                val sdfInput = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                val sdfCustom = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
+                val itemDate = sdfInput.parse(dateStr)
+                val startDate = sdfCustom.parse(customStart)
+                val endDate = sdfCustom.parse(customEnd)
+                if (itemDate != null && startDate != null && endDate != null) {
+                    !itemDate.before(startDate) && !itemDate.after(endDate)
+                } else true
+            } catch (e: Exception) {
+                true
+            }
+        }
+    }
+}
+
+private fun formatIndianCurrency(amount: Double): String {
+    val formatter = java.text.NumberFormat.getCurrencyInstance(Locale("en", "IN"))
+    return formatter.format(amount).replace("INR", "₹").replace("₹ ", "₹ ")
+}
 
 @Composable
 private fun SummaryMetricCard(
@@ -1506,7 +2025,6 @@ private fun MonthlyLineChartCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Line Chart Canvas
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1515,7 +2033,6 @@ private fun MonthlyLineChartCard(
                 val width = size.width
                 val height = size.height
 
-                // Draw Horizontal Grid Lines
                 for (i in 0..3) {
                     val y = height * (i / 3f)
                     drawLine(
@@ -1561,7 +2078,6 @@ private fun MonthlyLineChartCard(
                     fillPath.lineTo(width, height)
                     fillPath.close()
 
-                    // Draw Gradient Fill
                     drawPath(
                         path = fillPath,
                         brush = Brush.verticalGradient(
@@ -1569,14 +2085,12 @@ private fun MonthlyLineChartCard(
                         )
                     )
 
-                    // Draw Line Path
                     drawPath(
                         path = path,
                         color = RoyalBlueLight,
                         style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
                     )
 
-                    // Draw Points
                     points.forEachIndexed { index, value ->
                         val x = index * stepX
                         val targetY = height - (value * height * 0.8f)
@@ -1598,7 +2112,6 @@ private fun MonthlyLineChartCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // X-Axis Month Labels
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -1634,7 +2147,6 @@ private fun PlanDonutChartCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Donut Canvas
                 Box(
                     modifier = Modifier.size(120.dp),
                     contentAlignment = Alignment.Center
@@ -1687,7 +2199,6 @@ private fun PlanDonutChartCard(
 
                 Spacer(modifier = Modifier.width(16.dp))
 
-                // Plan Legend Breakdown
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1755,7 +2266,6 @@ private fun StatusBarChartCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Bar Chart Canvas
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1780,7 +2290,6 @@ private fun StatusBarChartCard(
                     data.forEachIndexed { index, (paid, pending, overdue) ->
                         val groupCenterX = index * groupWidth + (groupWidth / 2f)
 
-                        // Paid Bar
                         val paidH = height * paid * progress
                         drawRoundRect(
                             color = AccentGreen,
@@ -1789,7 +2298,6 @@ private fun StatusBarChartCard(
                             cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                         )
 
-                        // Pending Bar
                         val pendingH = height * pending * progress
                         drawRoundRect(
                             color = AccentAmber,
@@ -1798,7 +2306,6 @@ private fun StatusBarChartCard(
                             cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
                         )
 
-                        // Overdue Bar
                         val overdueH = height * overdue * progress
                         drawRoundRect(
                             color = AccentRed,
@@ -1833,7 +2340,7 @@ private fun StatusDotLegend(color: Color, label: String) {
     }
 }
 
-// Top Customer Item
+// Top Customer Row Item
 @Composable
 private fun TopCustomerRowItem(
     customer: TopCustomerData,
@@ -1853,7 +2360,6 @@ private fun TopCustomerRowItem(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // Avatar
                 Surface(
                     color = RoyalBluePrimary.copy(alpha = 0.2f),
                     shape = CircleShape,
@@ -1897,7 +2403,7 @@ private fun TopCustomerRowItem(
     }
 }
 
-// Recent Collection Item
+// Recent Collection Row Item
 @Composable
 private fun RecentCollectionRowItem(
     collection: RecentCollectionData,

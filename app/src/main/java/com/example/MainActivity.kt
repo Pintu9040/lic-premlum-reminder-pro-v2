@@ -38,6 +38,7 @@ import com.example.ui.payment.PaymentCollectionDialog
 import com.example.ui.payment.PaymentHistoryScreen
 import com.example.ui.payment.PrintPreviewScreen
 import com.example.ui.payment.ReceiptScreen
+import com.example.ui.payment.RecordPaymentScreen
 import com.example.ui.policy.*
 import com.example.ui.reminders.ReminderCenterScreen
 import com.example.ui.reminders.ReminderListScreen
@@ -176,6 +177,7 @@ sealed class ScreenDestination {
     data class PolicyDetail(val policy: PolicyEntity) : ScreenDestination()
     object Reminders : ScreenDestination()
     object Calendar : ScreenDestination()
+    object RecordPayment : ScreenDestination()
     object Payments : ScreenDestination()
     data class CustomerPaymentHistory(val customer: CustomerEntity) : ScreenDestination()
     object Reports : ScreenDestination()
@@ -223,7 +225,7 @@ fun MainAppContent(
         ScreenDestination.Customers, is ScreenDestination.CustomerDetail, is ScreenDestination.CustomerPaymentHistory -> AppNavigationTab.CUSTOMERS
         ScreenDestination.Policies, is ScreenDestination.PolicyDetail, ScreenDestination.AddPolicy -> AppNavigationTab.POLICIES
         ScreenDestination.Reminders, ScreenDestination.Calendar -> AppNavigationTab.REMINDERS
-        ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
+        ScreenDestination.RecordPayment, ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
         ScreenDestination.Reports -> AppNavigationTab.REPORTS
         ScreenDestination.Documents -> AppNavigationTab.DOCUMENTS
         ScreenDestination.Settings -> AppNavigationTab.SETTINGS
@@ -249,7 +251,9 @@ fun MainAppContent(
                 currentDestination !is ScreenDestination.CustomerPaymentHistory &&
                 currentDestination !is ScreenDestination.PolicyDetail &&
                 currentDestination != ScreenDestination.Payments &&
-                currentDestination != ScreenDestination.AddPolicy
+                currentDestination != ScreenDestination.RecordPayment &&
+                currentDestination != ScreenDestination.AddPolicy &&
+                currentDestination != ScreenDestination.Reports
             ) {
                 TopAppBar(
                     title = {
@@ -372,7 +376,6 @@ fun MainAppContent(
         ) {
             // Secondary top tab navigation when on Settings or More options
             if (currentTab == AppNavigationTab.SETTINGS ||
-                currentTab == AppNavigationTab.REPORTS ||
                 currentTab == AppNavigationTab.DOCUMENTS
             ) {
                 ScrollableTabRow(
@@ -419,6 +422,7 @@ fun MainAppContent(
                             onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
                             onNavigateToCalendar = { navigateTo(ScreenDestination.Calendar) },
                             onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
+                            onNavigateToRecordPayment = { navigateTo(ScreenDestination.RecordPayment) },
                             onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
                             onNavigateToDocuments = { navigateTo(ScreenDestination.Documents) },
                             onNavigateToSettings = { navigateTo(ScreenDestination.Settings) },
@@ -475,7 +479,15 @@ fun MainAppContent(
 
                     is ScreenDestination.Reminders -> {
                         ReminderCenterScreen(
-                            onBack = { handleBackPress() }
+                            viewModel = licViewModel,
+                            onBack = { handleBackPress() },
+                            onCollectPremium = { policyForPaymentCollection = it },
+                            onViewPolicyDetail = { polNum ->
+                                val matchingPolicy = licViewModel.policies.value.find { it.policyNumber.equals(polNum, ignoreCase = true) }
+                                if (matchingPolicy != null) {
+                                    navigateTo(ScreenDestination.PolicyDetail(matchingPolicy))
+                                }
+                            }
                         )
                     }
 
@@ -485,16 +497,26 @@ fun MainAppContent(
                         )
                     }
 
+                    is ScreenDestination.RecordPayment -> {
+                        RecordPaymentScreen(
+                            viewModel = licViewModel,
+                            onBack = { handleBackPress() },
+                            onPaymentSaved = { handleBackPress() }
+                        )
+                    }
+
                     is ScreenDestination.Payments -> {
-                        PaymentHistoryScreen(viewModel = licViewModel)
+                        PaymentHistoryScreen(
+                            viewModel = licViewModel,
+                            onBack = { handleBackPress() }
+                        )
                     }
 
                     is ScreenDestination.CustomerPaymentHistory -> {
                         val cust = (currentDestination as ScreenDestination.CustomerPaymentHistory).customer
-                        val activeCust = customersList.find { it.id == cust.id } ?: cust
-                        com.example.ui.payment.CustomerPaymentHistoryScreen(
-                            customer = activeCust,
+                        PaymentHistoryScreen(
                             viewModel = licViewModel,
+                            initialCustomer = cust,
                             onBack = { handleBackPress() }
                         )
                     }
@@ -537,6 +559,7 @@ fun MainAppContent(
                             onNavigateToReminders = { navigateTo(ScreenDestination.Reminders) },
                             onNavigateToCalendar = { navigateTo(ScreenDestination.Calendar) },
                             onNavigateToPayments = { navigateTo(ScreenDestination.Payments) },
+                            onNavigateToRecordPayment = { navigateTo(ScreenDestination.RecordPayment) },
                             onNavigateToReports = { navigateTo(ScreenDestination.Reports) },
                             onAddCustomer = { showAddCustomerDialog = true },
                             onAddPolicy = { showAddPolicyDialog = true },

@@ -22,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import kotlinx.coroutines.launch
 import com.example.ui.components.*
+import com.example.util.PaymentAllocationEngine
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,26 +74,7 @@ fun parsePlanDetails(fullPlanName: String): Pair<String, String> {
 
 fun getPolicyOutstandingBalance(policy: PolicyEntity, payments: List<PaymentEntity>): Double {
     if (policy.premiumAmount <= 0) return 0.0
-    val totalPaid = payments.filter { it.policyId == policy.id }.sumOf { it.paidAmount }
-    val cyclePaid = totalPaid % policy.premiumAmount
-    
-    // If there is an active partial payment for the current cycle
-    if (cyclePaid > 0.001) {
-        val remaining = policy.premiumAmount - cyclePaid
-        return if (remaining > 0) remaining else 0.0
-    }
-
-    // Check if the policy is currently due, overdue, in grace, or lapsed
-    val isDueOrLapsed = policy.status.equals("Due", ignoreCase = true) ||
-            policy.status.equals("Lapsed", ignoreCase = true) ||
-            policy.status.equals("Grace", ignoreCase = true) ||
-            policy.status.equals("Overdue", ignoreCase = true) ||
-            try {
-                val due = java.time.LocalDate.parse(policy.dueDate)
-                !due.isAfter(java.time.LocalDate.now())
-            } catch (e: Exception) { false }
-
-    return if (isDueOrLapsed) policy.premiumAmount else 0.0
+    return PaymentAllocationEngine.calculateCurrentDueSummary(policy, payments).outstanding
 }
 
 fun sharePolicySummaryText(

@@ -3,6 +3,7 @@ package com.example.data.repository
 import android.util.Log
 import com.example.data.local.*
 import com.example.data.remote.FirebaseSyncManager
+import com.example.util.PaymentAllocationEngine
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
@@ -322,6 +323,7 @@ class LicRepository(
                                         paymentMode = doc.getString("paymentMode") ?: "UPI",
                                         receiptNumber = doc.getString("receiptNumber") ?: "",
                                         notes = doc.getString("notes") ?: "",
+                                        installmentDueDate = doc.getString("installmentDueDate") ?: "",
                                         createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
                                     )
                                 }
@@ -348,11 +350,21 @@ class LicRepository(
 
     suspend fun collectPremium(payment: PaymentEntity, nextDueDate: String? = null) {
         val newPaymentId = if (payment.id == 0L) System.currentTimeMillis() else payment.id
-        val insertedPayment = payment.copy(id = newPaymentId)
+        val policy = policyDao.getPolicyById(payment.policyId)
+
+        val targetDueDate = if (payment.installmentDueDate.isNotBlank()) {
+            payment.installmentDueDate
+        } else {
+            policy?.dueDate ?: LocalDate.now().toString()
+        }
+
+        val insertedPayment = payment.copy(
+            id = newPaymentId,
+            installmentDueDate = targetDueDate
+        )
 
         paymentDao.insertPayment(insertedPayment)
 
-        val policy = policyDao.getPolicyById(payment.policyId)
         val uid = syncManager.getOrEnsureUid()
 
         if (policy != null) {
@@ -392,22 +404,16 @@ class LicRepository(
     private suspend fun recalculatePolicyAndDueDate(policy: PolicyEntity, providedNextDueDate: String?) {
         val uid = syncManager.getOrEnsureUid()
         val allPaymentsForPolicy = paymentDao.getAllPaymentsSync().filter { it.policyId == policy.id }
-        val totalPaid = allPaymentsForPolicy.sumOf { it.paidAmount }
         val installment = policy.premiumAmount
 
         if (installment <= 0) return
 
-        val completedCycles = (totalPaid / installment).toInt()
-        
+        val summary = PaymentAllocationEngine.calculateCurrentDueSummary(policy, allPaymentsForPolicy)
+
         val updatedDueDate = if (providedNextDueDate != null && providedNextDueDate.isNotBlank()) {
             providedNextDueDate
-        } else if (completedCycles > 0) {
-            val baseDateStr = if (policy.issueDate.isNotBlank()) policy.issueDate else policy.dueDate
-            var calculatedDate = baseDateStr
-            for (i in 0 until completedCycles) {
-                calculatedDate = advanceDueDate(calculatedDate, policy.premiumMode)
-            }
-            calculatedDate
+        } else if (summary.outstanding == 0.0 && summary.totalPaidForCurrentDue >= policy.premiumAmount) {
+            PaymentAllocationEngine.advanceDueDate(policy.dueDate, policy.premiumMode)
         } else {
             policy.dueDate
         }

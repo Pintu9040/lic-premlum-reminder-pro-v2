@@ -2052,18 +2052,7 @@ fun CustomerDetailScreen(
                             HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant)
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            if (customerPayments.isEmpty()) {
-                                Text("No payment transactions recorded yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } else {
-                                com.example.ui.payment.CustomerPaymentHistoryDataTable(
-                                    payments = customerPayments,
-                                    policies = customerPolicies,
-                                    customerName = customer.name,
-                                    onEdit = { editingPayment = it },
-                                    onDelete = { deletingPayment = it },
-                                    onReceipt = { viewingReceiptPayment = it }
-                                )
-                            }
+                            Text("No payment transactions recorded yet.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }

@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.*
 import com.example.data.repository.DashboardStats
 import com.example.data.repository.LicRepository
+import com.example.util.PaymentAllocationEngine
 import com.example.util.SearchFilterEngine
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
@@ -443,16 +444,20 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         val currentMonth = today.monthValue
         val currentYear = today.year
 
-        val totalPremium = policies.sumOf { it.premiumAmount }
-        val totalPaid = paymentsList.sumOf { it.paidAmount + it.lateFee }
-        val remaining = (totalPremium - totalPaid).coerceAtLeast(0.0)
+        val policySummaries = policies.map { PaymentAllocationEngine.calculateCurrentDueSummary(it, paymentsList) }
+        val totalPremium = policySummaries.sumOf { it.premiumAmount }
+        val totalPaidForCurrentDues = policySummaries.sumOf { it.totalPaidForCurrentDue }
+        val totalPaidAllTime = paymentsList.sumOf { it.paidAmount + it.lateFee }
+        val remaining = policySummaries.sumOf { it.outstanding }
 
-        val outstanding = policies.filter { policy ->
-            try {
-                val d = LocalDate.parse(policy.dueDate)
-                d.isBefore(today) || d.isEqual(today)
-            } catch (e: Exception) { false }
-        }.sumOf { it.premiumAmount }
+        val outstanding = policySummaries.filter { summary ->
+            val d = SearchFilterEngine.parseLocalDateSafe(summary.currentDueDate)
+            if (d != null) {
+                (d.isBefore(today) || d.isEqual(today)) && summary.outstanding > 0.0
+            } else {
+                summary.outstanding > 0.0
+            }
+        }.sumOf { it.outstanding }
 
         val todayCollect = paymentsList.filter { it.paymentDate == todayStr }.sumOf { it.paidAmount + it.lateFee }
         val monthCollect = paymentsList.filter {
@@ -462,11 +467,11 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) { false }
         }.sumOf { it.paidAmount + it.lateFee }
 
-        val progress = if (totalPremium > 0) ((totalPaid / totalPremium) * 100).toFloat().coerceAtMost(100f) else 0f
+        val progress = if (totalPremium > 0) ((totalPaidForCurrentDues / totalPremium) * 100).toFloat().coerceAtMost(100f) else 0f
 
         PaymentDashboardStats(
             totalPremium = totalPremium,
-            totalPaid = totalPaid,
+            totalPaid = totalPaidAllTime,
             remainingBalance = remaining,
             outstandingAmount = outstanding,
             todayCollection = todayCollect,
@@ -625,7 +630,8 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
                 paymentDate = dateStr,
                 paymentMode = paymentMode,
                 receiptNumber = generatedReceipt,
-                notes = notes
+                notes = notes,
+                installmentDueDate = policy.dueDate
             )
 
             repository.collectPremium(payment)
