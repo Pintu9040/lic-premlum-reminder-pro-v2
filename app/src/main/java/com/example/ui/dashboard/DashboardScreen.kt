@@ -86,7 +86,8 @@ fun DashboardScreen(
     onAddCustomer: () -> Unit,
     onAddPolicy: () -> Unit,
     onCollectPremium: (PolicyEntity) -> Unit,
-    onNavigateToCustomerPaymentHistory: ((CustomerEntity) -> Unit)? = null
+    onNavigateToCustomerPaymentHistory: ((CustomerEntity) -> Unit)? = null,
+    onNavigateToPaymentQr: ((PolicyEntity?, CustomerEntity?, Double) -> Unit)? = null
 ) {
     val stats by viewModel.dashboardStats.collectAsState()
     val policies by viewModel.policies.collectAsState()
@@ -550,7 +551,7 @@ fun DashboardScreen(
                         title = "Scan QR",
                         icon = Icons.Default.QrCodeScanner,
                         iconGradient = listOf(Color(0xFF06B6D4), Color(0xFF0E7490)),
-                        onClick = { showQrDialog = true },
+                        onClick = { onNavigateToPaymentQr?.invoke(null, null, 0.0) },
                         modifier = Modifier.weight(1f),
                         testTag = "action_scan_qr"
                     )
@@ -876,10 +877,10 @@ fun DashboardScreen(
     // 7. PAYMENT LINK & SCAN QR MODAL
     // -------------------------------------------------------------
     if (showQrDialog) {
-        PaymentLinkModal(
-            onDismiss = { showQrDialog = false },
-            duePolicies = dueTodayPolicies
-        )
+        LaunchedEffect(Unit) {
+            showQrDialog = false
+            onNavigateToPaymentQr?.invoke(null, null, 0.0)
+        }
     }
 
     if (showFilterBottomSheet) {

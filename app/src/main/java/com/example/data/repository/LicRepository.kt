@@ -439,58 +439,59 @@ class LicRepository(
     }
 
     // --- Documents Firestore Flow & Operations ---
-    val allDocuments: Flow<List<DocumentEntity>> = callbackFlow {
-        val firestore = getFirestore()
-        if (firestore == null) {
-            val job = scope.launch {
-                documentDao.getAllDocuments().collect { trySend(it) }
+    val allDocuments: Flow<List<DocumentEntity>> = channelFlow {
+        val roomJob = scope.launch {
+            documentDao.getAllDocuments().collect { list ->
+                send(list)
             }
-            awaitClose { job.cancel() }
-            return@callbackFlow
         }
 
+        val firestore = getFirestore()
         var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
-        val job = scope.launch {
-            val uid = syncManager.getOrEnsureUid()
-            Log.d("FirestoreSync", "Listening for Documents in Firestore at path: agents/$uid/documents")
-            listenerRegistration = firestore.collection("agents").document(uid)
-                .collection("documents")
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) {
-                        Log.w("FirestoreSync", "Firestore document listener notice for UID: $uid (${error.localizedMessage}). Falling back to local database.")
-                        scope.launch {
-                            val local = documentDao.getAllDocumentsSync()
-                            trySend(local)
+        if (firestore != null) {
+            scope.launch {
+                try {
+                    val uid = syncManager.getOrEnsureUid()
+                    Log.d("FirestoreSync", "Listening for Documents in Firestore at path: agents/$uid/documents")
+                    listenerRegistration = firestore.collection("agents").document(uid)
+                        .collection("documents")
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null) {
+                                Log.w("FirestoreSync", "Firestore document listener notice for UID: $uid (${error.localizedMessage}). Local database active.")
+                                return@addSnapshotListener
+                            }
+                            if (snapshot != null) {
+                                Log.d("FirestoreSync", "Received Document snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
+                                val list = snapshot.documents.mapNotNull { doc ->
+                                    val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
+                                    if (id == 0L) null else DocumentEntity(
+                                        id = id,
+                                        customerId = doc.getLong("customerId"),
+                                        customerName = doc.getString("customerName") ?: "",
+                                        policyId = doc.getLong("policyId"),
+                                        docType = doc.getString("docType") ?: "Document",
+                                        title = doc.getString("title") ?: "",
+                                        fileUri = doc.getString("fileUri") ?: "",
+                                        fileSize = doc.getString("fileSize") ?: "1.0 MB",
+                                        uploadDate = doc.getString("uploadDate") ?: "",
+                                        createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                                    )
+                                }
+                                if (list.isNotEmpty()) {
+                                    scope.launch {
+                                        list.forEach { documentDao.insertDocument(it) }
+                                    }
+                                }
+                            }
                         }
-                        return@addSnapshotListener
-                    }
-                    if (snapshot != null) {
-                        Log.d("FirestoreSync", "Received Document snapshot update from Firestore for UID: $uid (Doc count: ${snapshot.size()})")
-                        val list = snapshot.documents.mapNotNull { doc ->
-                            val id = doc.getLong("id") ?: doc.id.toLongOrNull() ?: 0L
-                            DocumentEntity(
-                                id = id,
-                                customerId = doc.getLong("customerId"),
-                                customerName = doc.getString("customerName") ?: "",
-                                policyId = doc.getLong("policyId"),
-                                docType = doc.getString("docType") ?: "Document",
-                                title = doc.getString("title") ?: "",
-                                fileUri = doc.getString("fileUri") ?: "",
-                                fileSize = doc.getString("fileSize") ?: "1.0 MB",
-                                uploadDate = doc.getString("uploadDate") ?: "",
-                                createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
-                            )
-                        }
-                        scope.launch {
-                            list.forEach { documentDao.insertDocument(it) }
-                            val fullLocalList = documentDao.getAllDocumentsSync()
-                            trySend(fullLocalList)
-                        }
-                    }
+                } catch (e: Exception) {
+                    Log.w("FirestoreSync", "Error attaching document listener: ${e.localizedMessage}")
                 }
+            }
         }
+
         awaitClose {
-            job.cancel()
+            roomJob.cancel()
             listenerRegistration?.remove()
         }
     }

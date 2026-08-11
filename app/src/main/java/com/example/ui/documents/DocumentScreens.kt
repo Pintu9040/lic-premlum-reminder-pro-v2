@@ -4,12 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.launch
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,22 +18,24 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
-import com.example.ui.components.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import coil.compose.AsyncImage
 import com.example.data.local.CustomerEntity
 import com.example.data.local.DocumentEntity
 import com.example.ui.LicViewModel
@@ -42,197 +44,561 @@ import com.example.ui.theme.*
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDate
+import java.util.Locale
+
+private val TextMuted = Color(0xFF64748B)
 
 val SUPPORTED_DOC_TYPES = listOf(
     "Customer Photo",
     "Aadhaar Card",
     "PAN Card",
     "Policy Bond",
-    "Address Proof",
-    "Nominee Documents",
-    "Other Documents"
+    "Proposal Form",
+    "Other Document"
 )
+
+data class SavedFileInfo(
+    val fileUri: String,
+    val fileName: String,
+    val fileSize: String,
+    val mimeType: String
+)
+
+fun saveUriToInternalVault(context: Context, uri: Uri, defaultDocType: String): SavedFileInfo? {
+    return try {
+        val resolver = context.contentResolver
+        var displayName = ""
+        var sizeBytes = 0L
+        var mimeType = resolver.getType(uri) ?: "*/*"
+
+        resolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (cursor.moveToFirst()) {
+                if (nameIndex != -1) displayName = cursor.getString(nameIndex) ?: ""
+                if (sizeIndex != -1) sizeBytes = cursor.getLong(sizeIndex)
+            }
+        }
+
+        if (displayName.isBlank()) {
+            val extension = when {
+                mimeType.contains("pdf", ignoreCase = true) -> "pdf"
+                mimeType.contains("png", ignoreCase = true) -> "png"
+                else -> "jpg"
+            }
+            displayName = "${defaultDocType.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}.$extension"
+        }
+
+        val vaultDir = File(context.filesDir, "vault_documents").apply { if (!exists()) mkdirs() }
+        val sanitizedFileName = displayName.replace("[^a-zA-Z0-9._-]".toRegex(), "_")
+        val savedFile = File(vaultDir, "doc_${System.currentTimeMillis()}_$sanitizedFileName")
+
+        resolver.openInputStream(uri)?.use { inputStream ->
+            FileOutputStream(savedFile).use { outputStream ->
+                inputStream.copyTo(outputStream)
+            }
+        }
+
+        val actualLength = if (savedFile.length() > 0) savedFile.length() else sizeBytes
+        val formattedSize = if (actualLength > 1024 * 1024) {
+            String.format(Locale.US, "%.1f MB", actualLength / (1024.0 * 1024.0))
+        } else {
+            "${(actualLength / 1024).coerceAtLeast(1)} KB"
+        }
+
+        SavedFileInfo(
+            fileUri = savedFile.absolutePath,
+            fileName = displayName,
+            fileSize = formattedSize,
+            mimeType = mimeType
+        )
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+fun saveBitmapToInternalVault(context: Context, bitmap: Bitmap, defaultDocType: String): SavedFileInfo? {
+    return try {
+        val vaultDir = File(context.filesDir, "vault_documents").apply { if (!exists()) mkdirs() }
+        val fileName = "${defaultDocType.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}.jpg"
+        val savedFile = File(vaultDir, "doc_${System.currentTimeMillis()}_$fileName")
+
+        FileOutputStream(savedFile).use { out ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+        }
+
+        val formattedSize = if (savedFile.length() > 1024 * 1024) {
+            String.format(Locale.US, "%.1f MB", savedFile.length() / (1024.0 * 1024.0))
+        } else {
+            "${(savedFile.length() / 1024).coerceAtLeast(1)} KB"
+        }
+
+        SavedFileInfo(
+            fileUri = savedFile.absolutePath,
+            fileName = fileName,
+            fileSize = formattedSize,
+            mimeType = "image/jpeg"
+        )
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    }
+}
+
+fun openOrShareDocument(context: Context, doc: DocumentEntity) {
+    try {
+        val file = File(doc.fileUri)
+        if (file.exists()) {
+            val contentUri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+            val extension = file.extension.lowercase()
+            val mimeType = when (extension) {
+                "pdf" -> "application/pdf"
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                else -> context.contentResolver.getType(contentUri) ?: "*/*"
+            }
+
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(contentUri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            val chooser = Intent.createChooser(viewIntent, "Open ${doc.title}")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(chooser)
+        } else if (doc.fileUri.startsWith("content://")) {
+            val uri = Uri.parse(doc.fileUri)
+            val mimeType = context.contentResolver.getType(uri) ?: "*/*"
+            val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mimeType)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(Intent.createChooser(viewIntent, "Open ${doc.title}"))
+        } else {
+            Toast.makeText(context, "File reference not found: ${doc.title}", Toast.LENGTH_SHORT).show()
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "Cannot open file viewer: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun downloadDocument(context: Context, doc: DocumentEntity) {
+    openOrShareDocument(context, doc)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DocumentListScreen(
-    viewModel: LicViewModel
+    viewModel: LicViewModel,
+    initialCustomer: CustomerEntity? = null
 ) {
     val documents by viewModel.documents.collectAsState()
     val customers by viewModel.customers.collectAsState()
+    val policies by viewModel.policies.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val context = LocalContext.current
 
     var selectedDocTypeFilter by remember { mutableStateOf("ALL") }
-    var selectedCustomerFilter by remember { mutableStateOf<CustomerEntity?>(null) }
+    var selectedCustomerFilter by remember { mutableStateOf<CustomerEntity?>(initialCustomer) }
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var preselectedCustomerForAdd by remember { mutableStateOf<CustomerEntity?>(null) }
     var documentToPreview by remember { mutableStateOf<DocumentEntity?>(null) }
     var documentToReplace by remember { mutableStateOf<DocumentEntity?>(null) }
     var documentToDelete by remember { mutableStateOf<DocumentEntity?>(null) }
 
-    val filteredDocs = remember(documents, searchQuery, selectedDocTypeFilter, selectedCustomerFilter) {
+    LaunchedEffect(initialCustomer) {
+        if (initialCustomer != null) {
+            selectedCustomerFilter = initialCustomer
+        }
+    }
+
+    // Filtered Documents
+    val filteredDocs = remember(documents, customers, policies, searchQuery, selectedDocTypeFilter, selectedCustomerFilter) {
         documents.filter { doc ->
+            val cust = customers.find { it.id == doc.customerId }
+            val custPolicies = if (cust != null) policies.filter { it.customerId == cust.id } else emptyList()
+
             val matchesSearch = searchQuery.isBlank() ||
                     doc.title.contains(searchQuery, ignoreCase = true) ||
                     doc.docType.contains(searchQuery, ignoreCase = true) ||
-                    doc.customerName.contains(searchQuery, ignoreCase = true)
+                    doc.customerName.contains(searchQuery, ignoreCase = true) ||
+                    (cust != null && cust.name.contains(searchQuery, ignoreCase = true)) ||
+                    (cust != null && cust.mobile.contains(searchQuery, ignoreCase = true)) ||
+                    (cust != null && cust.aadhaar.contains(searchQuery, ignoreCase = true)) ||
+                    (cust != null && cust.pan.contains(searchQuery, ignoreCase = true)) ||
+                    custPolicies.any { it.policyNumber.contains(searchQuery, ignoreCase = true) } ||
+                    doc.fileUri.contains(searchQuery, ignoreCase = true)
 
             val matchesType = selectedDocTypeFilter == "ALL" || doc.docType.equals(selectedDocTypeFilter, ignoreCase = true)
-            val matchesCustomer = selectedCustomerFilter == null || doc.customerId == selectedCustomerFilter?.id
+
+            val matchesCustomer = selectedCustomerFilter == null ||
+                    doc.customerId == selectedCustomerFilter?.id ||
+                    doc.customerName.equals(selectedCustomerFilter?.name, ignoreCase = true)
 
             matchesSearch && matchesType && matchesCustomer
         }
     }
 
-    Column(
+    val displayCustomers = remember(customers, filteredDocs, searchQuery, selectedDocTypeFilter) {
+        if (searchQuery.isNotBlank() || selectedDocTypeFilter != "ALL") {
+            val matchingCustIds = filteredDocs.mapNotNull { it.customerId }.toSet()
+            val matchingCustNames = filteredDocs.map { it.customerName }.toSet()
+            customers.filter { c -> c.id in matchingCustIds || c.name in matchingCustNames }
+        } else {
+            customers
+        }
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Header Surface
-        Surface(
-            color = RoyalBluePrimary,
-            modifier = Modifier.fillMaxWidth()
+        // Main Single Full-Screen Scroll Container
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 120.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            // Header Section
+            item {
+                Surface(
+                    color = RoyalBluePrimary,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "KYC & Policy Document Vault",
+                                style = MaterialTheme.typography.titleLarge.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 20.sp
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "${documents.size} Secured Digital Files stored",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = Color(0xFFFFEDD5),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+
+                        Surface(
+                            color = Color.White.copy(alpha = 0.2f),
+                            shape = CircleShape,
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderSpecial,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Search Bar
+            item {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { viewModel.setSearchQuery(it) },
+                    placeholder = {
                         Text(
-                            text = "KYC & Policy Document Vault",
-                            style = MaterialTheme.typography.titleLarge.copy(
+                            "Search client, mobile, policy # or doc name...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = TextMuted,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(Icons.Default.Search, contentDescription = "Search", tint = RoyalBluePrimary)
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("document_search_input"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = RoyalBluePrimary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface
+                    )
+                )
+            }
+
+            // Document Category Filter Row
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Document Category:",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    )
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedDocTypeFilter == "ALL",
+                                onClick = { selectedDocTypeFilter = "ALL" },
+                                label = { Text("All Vault Docs", style = MaterialTheme.typography.labelSmall) },
+                                leadingIcon = if (selectedDocTypeFilter == "ALL") {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                } else null
+                            )
+                        }
+                        items(SUPPORTED_DOC_TYPES) { type ->
+                            FilterChip(
+                                selected = selectedDocTypeFilter == type,
+                                onClick = { selectedDocTypeFilter = type },
+                                label = { Text(type, style = MaterialTheme.typography.labelSmall) },
+                                leadingIcon = if (selectedDocTypeFilter == type) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                } else null
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Client Filter Bar
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Filter by Client:",
+                            style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 21.sp
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         )
-                        Text(
-                            text = "${documents.size} Secured Digital Files stored",
-                            style = MaterialTheme.typography.bodySmall.copy(color = AccentOrangeLight, fontWeight = FontWeight.SemiBold)
-                        )
+                        if (selectedCustomerFilter != null) {
+                            TextButton(
+                                onClick = { selectedCustomerFilter = null },
+                                contentPadding = PaddingValues(0.dp)
+                            ) {
+                                Text("Show All Clients", fontSize = 12.sp, color = RoyalBluePrimary, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
 
-                    Button(
-                        onClick = { showAddDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier.testTag("add_document_button")
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.UploadFile, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Upload", style = MaterialTheme.typography.labelMedium.copy(color = Color.White, fontWeight = FontWeight.Bold))
+                        item {
+                            FilterChip(
+                                selected = selectedCustomerFilter == null,
+                                onClick = { selectedCustomerFilter = null },
+                                label = { Text("All Clients (${customers.size})", style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
+                        items(customers) { cust ->
+                            val docCount = documents.count { it.customerId == cust.id || it.customerName.equals(cust.name, ignoreCase = true) }
+                            FilterChip(
+                                selected = selectedCustomerFilter?.id == cust.id,
+                                onClick = { selectedCustomerFilter = cust },
+                                label = { Text("${cust.name} ($docCount)", style = MaterialTheme.typography.labelSmall) }
+                            )
+                        }
                     }
                 }
+            }
 
-                Spacer(modifier = Modifier.height(14.dp))
+            // Client-Wise Grouped Documents
+            if (selectedCustomerFilter != null) {
+                // Single Client Selected View
+                val cust = selectedCustomerFilter!!
+                val clientDocs = filteredDocs.filter { it.customerId == cust.id || it.customerName.equals(cust.name, ignoreCase = true) }
 
-                SearchBarComponent(
-                    query = searchQuery,
-                    onQueryChange = { viewModel.setSearchQuery(it) },
-                    placeholderText = "Search by doc name, client, Aadhaar...",
-                    testTag = "document_search_input"
-                )
+                item {
+                    ClientHeaderBanner(
+                        customer = cust,
+                        docCount = clientDocs.size,
+                        onUploadForClient = {
+                            preselectedCustomerForAdd = cust
+                            showAddDialog = true
+                        }
+                    )
+                }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Document Type Filter Row
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (clientDocs.isEmpty()) {
                     item {
-                        FilterChip(
-                            selected = selectedDocTypeFilter == "ALL",
-                            onClick = { selectedDocTypeFilter = "ALL" },
-                            label = { Text("All Vault Docs", style = MaterialTheme.typography.labelSmall) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color.White, selectedLabelColor = RoyalBluePrimary)
+                        EmptyClientDocBox(
+                            customerName = cust.name,
+                            onUploadClick = {
+                                preselectedCustomerForAdd = cust
+                                showAddDialog = true
+                            }
                         )
                     }
-                    items(SUPPORTED_DOC_TYPES) { type ->
-                        FilterChip(
-                            selected = selectedDocTypeFilter == type,
-                            onClick = { selectedDocTypeFilter = type },
-                            label = { Text(type, style = MaterialTheme.typography.labelSmall) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color.White, selectedLabelColor = RoyalBluePrimary)
+                } else {
+                    items(clientDocs, key = { it.id }) { doc ->
+                        DocumentCardItem(
+                            doc = doc,
+                            onPreview = { documentToPreview = doc },
+                            onReplace = { documentToReplace = doc },
+                            onDelete = { documentToDelete = doc },
+                            onDownload = { downloadDocument(context, doc) }
                         )
+                    }
+                }
+            } else {
+                // All Clients View - Grouped by Client
+                if (displayCustomers.isEmpty() && filteredDocs.isEmpty()) {
+                    item {
+                        StandardEmptyState(
+                            title = "No Documents Found",
+                            description = "No documents match your search or filter. Use the circular button below to upload documents.",
+                            icon = Icons.Outlined.FolderOff,
+                            actionLabel = "Upload Document",
+                            onActionClick = {
+                                preselectedCustomerForAdd = customers.firstOrNull()
+                                showAddDialog = true
+                            }
+                        )
+                    }
+                } else {
+                    for (cust in displayCustomers) {
+                        val custDocs = filteredDocs.filter { it.customerId == cust.id || it.customerName.equals(cust.name, ignoreCase = true) }
+
+                        item(key = "client_header_${cust.id}") {
+                            ClientHeaderBanner(
+                                customer = cust,
+                                docCount = custDocs.size,
+                                onUploadForClient = {
+                                    preselectedCustomerForAdd = cust
+                                    showAddDialog = true
+                                }
+                            )
+                        }
+
+                        if (custDocs.isEmpty()) {
+                            item(key = "client_empty_${cust.id}") {
+                                EmptyClientDocBox(
+                                    customerName = cust.name,
+                                    onUploadClick = {
+                                        preselectedCustomerForAdd = cust
+                                        showAddDialog = true
+                                    }
+                                )
+                            }
+                        } else {
+                            items(custDocs, key = { "doc_${it.id}" }) { doc ->
+                                DocumentCardItem(
+                                    doc = doc,
+                                    onPreview = { documentToPreview = doc },
+                                    onReplace = { documentToReplace = doc },
+                                    onDelete = { documentToDelete = doc },
+                                    onDownload = { downloadDocument(context, doc) }
+                                )
+                            }
+                        }
+
+                        item(key = "client_spacer_${cust.id}") {
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                    }
+
+                    // Any unassigned documents
+                    val unassignedDocs = filteredDocs.filter { doc ->
+                        doc.customerId == null && displayCustomers.none { it.name.equals(doc.customerName, ignoreCase = true) }
+                    }
+
+                    if (unassignedDocs.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "GENERAL VAULT DOCUMENTS",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoyalBluePrimary
+                                )
+                            )
+                        }
+                        items(unassignedDocs, key = { "unassigned_${it.id}" }) { doc ->
+                            DocumentCardItem(
+                                doc = doc,
+                                onPreview = { documentToPreview = doc },
+                                onReplace = { documentToReplace = doc },
+                                onDelete = { documentToDelete = doc },
+                                onDownload = { downloadDocument(context, doc) }
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // Optional Customer Filter Bar
-        if (customers.isNotEmpty()) {
-            LazyRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                item {
-                    Text("Filter by Client:", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
-                }
-                item {
-                    FilterChip(
-                        selected = selectedCustomerFilter == null,
-                        onClick = { selectedCustomerFilter = null },
-                        label = { Text("All Clients") }
-                    )
-                }
-                items(customers) { cust ->
-                    FilterChip(
-                        selected = selectedCustomerFilter?.id == cust.id,
-                        onClick = { selectedCustomerFilter = cust },
-                        label = { Text(cust.name) }
-                    )
-                }
-            }
-        }
-
-        if (filteredDocs.isEmpty()) {
-            StandardEmptyState(
-                title = "No Documents Found",
-                description = "No documents match your filter. Upload Aadhaar, PAN, Policy Bonds, or Nominee proofs to vault.",
-                icon = Icons.Outlined.FolderOff,
-                actionLabel = "Upload Document",
-                onActionClick = { showAddDialog = true }
+        // Small Circular FAB at Bottom-Right
+        FloatingActionButton(
+            onClick = {
+                preselectedCustomerForAdd = selectedCustomerFilter ?: customers.firstOrNull()
+                showAddDialog = true
+            },
+            shape = CircleShape,
+            containerColor = AccentOrange,
+            contentColor = Color.White,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 20.dp, end = 20.dp)
+                .size(56.dp)
+                .testTag("fab_upload_doc")
+        ) {
+            Icon(
+                imageVector = Icons.Default.UploadFile,
+                contentDescription = "Upload Document",
+                modifier = Modifier.size(26.dp)
             )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(filteredDocs, key = { it.id }) { doc ->
-                    DocumentCardItem(
-                        doc = doc,
-                        onPreview = { documentToPreview = doc },
-                        onReplace = { documentToReplace = doc },
-                        onDelete = { documentToDelete = doc },
-                        onDownload = { downloadDocument(context, doc) }
-                    )
-                }
-            }
         }
     }
 
-    // Add Document Dialog
+    // Modal Dialogs
     if (showAddDialog) {
         AddDocumentModal(
             customers = customers,
+            initialSelectedCustomer = preselectedCustomerForAdd ?: selectedCustomerFilter ?: customers.firstOrNull(),
             onDismiss = { showAddDialog = false },
             onSave = { doc ->
                 viewModel.addDocument(doc)
                 showAddDialog = false
-                Toast.makeText(context, "Document added to Vault successfully!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Document saved for ${doc.customerName}!", Toast.LENGTH_SHORT).show()
             }
         )
     }
 
-    // Preview Dialog
     documentToPreview?.let { doc ->
         DocumentPreviewModal(
             doc = doc,
@@ -249,7 +615,6 @@ fun DocumentListScreen(
         )
     }
 
-    // Replace Dialog
     documentToReplace?.let { doc ->
         ReplaceDocumentModal(
             existingDoc = doc,
@@ -257,21 +622,35 @@ fun DocumentListScreen(
             onReplaceComplete = { updatedDoc ->
                 viewModel.updateDocument(updatedDoc)
                 documentToReplace = null
-                Toast.makeText(context, "Document replaced in Vault!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Document updated in Vault!", Toast.LENGTH_SHORT).show()
             }
         )
     }
 
-    // Delete Confirmation Dialog
     documentToDelete?.let { doc ->
         AlertDialog(
             onDismissRequest = { documentToDelete = null },
-            title = { Text("Delete Document from Vault?", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)) },
-            text = { Text("Are you sure you want to permanently delete '${doc.title}' (${doc.docType})?") },
+            title = {
+                Text(
+                    "Delete Document from Vault?",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            },
+            text = {
+                Text("Are you sure you want to permanently delete '${doc.title}' (${doc.docType}) for client ${doc.customerName}?")
+            },
             confirmButton = {
                 Button(
                     onClick = {
                         viewModel.deleteDocument(doc)
+                        try {
+                            if (doc.fileUri.isNotBlank()) {
+                                val file = File(doc.fileUri)
+                                if (file.exists()) file.delete()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                         documentToDelete = null
                         Toast.makeText(context, "Document deleted", Toast.LENGTH_SHORT).show()
                     },
@@ -299,95 +678,210 @@ fun DocumentCardItem(
     onDelete: () -> Unit,
     onDownload: () -> Unit
 ) {
+    val imageFile = remember(doc.fileUri) {
+        if (doc.fileUri.isNotBlank()) {
+            try { File(doc.fileUri) } catch (e: Exception) { null }
+        } else null
+    }
+    val isImage = remember(doc.docType, doc.fileUri, doc.title) {
+        doc.docType == "Customer Photo" ||
+        doc.title.endsWith(".jpg", ignoreCase = true) ||
+        doc.title.endsWith(".jpeg", ignoreCase = true) ||
+        doc.title.endsWith(".png", ignoreCase = true) ||
+        doc.fileUri.endsWith(".jpg", ignoreCase = true) ||
+        doc.fileUri.endsWith(".png", ignoreCase = true)
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .shadow(2.dp, RoundedCornerShape(20.dp))
+            .shadow(2.dp, RoundedCornerShape(16.dp))
             .clickable { onPreview() },
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.surfaceVariant)
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(14.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = when (doc.docType) {
-                    "Customer Photo" -> AccentOrangeLight.copy(alpha = 0.3f)
-                    "Policy Bond" -> RoyalBlueContainer
-                    "Aadhaar Card", "PAN Card" -> EmeraldGreenContainer
-                    else -> MaterialTheme.colorScheme.surfaceVariant
-                },
-                modifier = Modifier.size(50.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = when (doc.docType) {
-                            "Customer Photo" -> Icons.Default.AccountCircle
-                            "Aadhaar Card" -> Icons.Default.Badge
-                            "PAN Card" -> Icons.Default.CreditCard
-                            "Policy Bond" -> Icons.Default.Description
-                            "Address Proof" -> Icons.Default.HomeWork
-                            "Nominee Documents" -> Icons.Default.Groups
-                            else -> Icons.Default.InsertDriveFile
+                // Category Icon or Image Thumbnail
+                if (isImage && imageFile != null && imageFile.exists()) {
+                    AsyncImage(
+                        model = imageFile,
+                        contentDescription = doc.title,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = when (doc.docType) {
+                            "Customer Photo" -> AccentOrangeContainer.copy(alpha = 0.2f)
+                            "Policy Bond" -> RoyalBlueContainer
+                            "Aadhaar Card", "PAN Card" -> EmeraldGreenContainer.copy(alpha = 0.2f)
+                            else -> MaterialTheme.colorScheme.surfaceVariant
                         },
-                        contentDescription = null,
-                        tint = when (doc.docType) {
-                            "Customer Photo" -> AccentOrange
-                            "Policy Bond" -> RoyalBluePrimary
-                            "Aadhaar Card", "PAN Card" -> EmeraldGreenSecondary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = when (doc.docType) {
+                                    "Customer Photo" -> Icons.Default.AccountCircle
+                                    "Aadhaar Card" -> Icons.Default.Badge
+                                    "PAN Card" -> Icons.Default.CreditCard
+                                    "Policy Bond" -> Icons.Default.Description
+                                    "Proposal Form" -> Icons.Default.Assignment
+                                    else -> Icons.Default.InsertDriveFile
+                                },
+                                contentDescription = null,
+                                tint = when (doc.docType) {
+                                    "Customer Photo" -> AccentOrange
+                                    "Policy Bond" -> RoyalBluePrimary
+                                    "Aadhaar Card", "PAN Card" -> EmeraldGreenSecondary
+                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                // Title & Category
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = doc.docType,
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = doc.title,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = doc.docType,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                )
-                Text(
-                    text = doc.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            // Footer row with Client name, Upload Date, File size & Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Info Column (Client, Date, Size)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     if (doc.customerName.isNotBlank()) {
-                        Text(
-                            text = "Client: ${doc.customerName}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = RoyalBluePrimary)
-                        )
-                        Text("•", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                tint = RoyalBluePrimary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = doc.customerName,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoyalBluePrimary,
+                                    fontSize = 12.sp
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
-                    Text(
-                        text = "${doc.uploadDate} • ${doc.fileSize}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
 
-            Row {
-                IconButton(onClick = onDownload, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Download, contentDescription = "Download", tint = RoyalBluePrimary, modifier = Modifier.size(20.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (doc.uploadDate.isNotBlank()) doc.uploadDate else "Recent",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextMuted,
+                                fontSize = 11.sp
+                            ),
+                            softWrap = false,
+                            maxLines = 1
+                        )
+                        Text("•", style = MaterialTheme.typography.labelSmall, color = TextMuted)
+                        Text(
+                            text = if (doc.fileSize.isNotBlank()) doc.fileSize else "File",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = TextMuted,
+                                fontSize = 11.sp
+                            ),
+                            softWrap = false,
+                            maxLines = 1
+                        )
+                    }
                 }
-                IconButton(onClick = onReplace, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Autorenew, contentDescription = "Replace", tint = AccentOrange, modifier = Modifier.size(20.dp))
-                }
-                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = ErrorRed, modifier = Modifier.size(20.dp))
+
+                // Action Buttons
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onDownload,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "Open / Download",
+                            tint = RoyalBluePrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onReplace,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Autorenew,
+                            contentDescription = "Restore / Replace",
+                            tint = AccentOrange,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = ErrorRed,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
         }
@@ -395,41 +889,166 @@ fun DocumentCardItem(
 }
 
 @Composable
+private fun ClientHeaderBanner(
+    customer: CustomerEntity,
+    docCount: Int,
+    onUploadForClient: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, RoyalBluePrimary.copy(alpha = 0.3f)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = RoyalBluePrimary,
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = customer.name.take(1).uppercase(),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(10.dp))
+
+                Column {
+                    Text(
+                        text = "CLIENT: ${customer.name}",
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Mobile: ${customer.mobile.ifBlank { "N/A" }} • Documents ($docCount)",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp
+                        ),
+                        softWrap = false,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            IconButton(
+                onClick = onUploadForClient,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add document",
+                    tint = RoyalBluePrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyClientDocBox(
+    customerName: String,
+    onUploadClick: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onUploadClick() }
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.FileUpload,
+                contentDescription = null,
+                tint = RoyalBluePrimary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "0 Documents for $customerName — Tap to upload",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    color = RoyalBluePrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp
+                )
+            )
+        }
+    }
+}
+
+@Composable
 fun AddDocumentModal(
     customers: List<CustomerEntity>,
+    initialSelectedCustomer: CustomerEntity? = null,
     onDismiss: () -> Unit,
     onSave: (DocumentEntity) -> Unit
 ) {
     val context = LocalContext.current
 
-    var selectedCustomer by remember { mutableStateOf<CustomerEntity?>(customers.firstOrNull()) }
-    var title by remember { mutableStateOf("") }
+    var selectedCustomer by remember { mutableStateOf(initialSelectedCustomer ?: customers.firstOrNull()) }
     var docType by remember { mutableStateOf("Aadhaar Card") }
-    var fileUriStr by remember { mutableStateOf("") }
-    var fileSizeStr by remember { mutableStateOf("1.5 MB") }
-    var uploadSource by remember { mutableStateOf("Gallery") }
-
-    // Launchers
-    val galleryLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            fileUriStr = uri.toString()
-            uploadSource = "Gallery File"
-            if (title.isBlank()) title = "Doc_${System.currentTimeMillis().toString().takeLast(6)}"
-        }
-    }
+    var savedFileInfo by remember { mutableStateOf<SavedFileInfo?>(null) }
+    var uploadSourceText by remember { mutableStateOf("") }
+    var customTitle by remember { mutableStateOf("") }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            val file = File(context.cacheDir, "cam_doc_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-            fileUriStr = Uri.fromFile(file).toString()
-            fileSizeStr = "${(file.length() / 1024).coerceAtLeast(120)} KB"
-            uploadSource = "Camera Capture"
-            if (title.isBlank()) title = "Photo_${docType.replace(" ", "_")}"
+            val info = saveBitmapToInternalVault(context, bitmap, docType)
+            if (info != null) {
+                savedFileInfo = info
+                uploadSourceText = "Camera Capture"
+                if (customTitle.isBlank()) customTitle = info.fileName
+            } else {
+                Toast.makeText(context, "Failed to save camera photo", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val info = saveUriToInternalVault(context, uri, docType)
+            if (info != null) {
+                savedFileInfo = info
+                uploadSourceText = "Gallery / Photos"
+                if (customTitle.isBlank()) customTitle = info.fileName
+            } else {
+                Toast.makeText(context, "Failed to read gallery photo", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -437,9 +1056,14 @@ fun AddDocumentModal(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            fileUriStr = uri.toString()
-            uploadSource = "File Storage"
-            if (title.isBlank()) title = "Document_${System.currentTimeMillis().toString().takeLast(6)}"
+            val info = saveUriToInternalVault(context, uri, docType)
+            if (info != null) {
+                savedFileInfo = info
+                uploadSourceText = "File Picker"
+                if (customTitle.isBlank()) customTitle = info.fileName
+            } else {
+                Toast.makeText(context, "Failed to read file", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -457,51 +1081,54 @@ fun AddDocumentModal(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Select Client *", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(customers) { cust ->
-                        FilterChip(
-                            selected = selectedCustomer?.id == cust.id,
-                            onClick = { selectedCustomer = cust },
-                            label = { Text(cust.name) }
-                        )
+                // 1. SELECT CLIENT
+                Text("1. Select Client *", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                if (customers.isEmpty()) {
+                    Text("No clients found. Please add a client first.", color = ErrorRed, fontSize = 12.sp)
+                } else {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(customers) { cust ->
+                            FilterChip(
+                                selected = selectedCustomer?.id == cust.id,
+                                onClick = { selectedCustomer = cust },
+                                label = { Text(cust.name, style = MaterialTheme.typography.labelSmall) },
+                                leadingIcon = if (selectedCustomer?.id == cust.id) {
+                                    { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                                } else null
+                            )
+                        }
                     }
                 }
 
-                Text("Document Category *", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                // 2. DOCUMENT TYPE
+                Text("2. Document Category *", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(SUPPORTED_DOC_TYPES) { type ->
                         FilterChip(
                             selected = docType == type,
                             onClick = { docType = type },
-                            label = { Text(type, style = MaterialTheme.typography.labelSmall) }
+                            label = { Text(type, style = MaterialTheme.typography.labelSmall) },
+                            leadingIcon = if (docType == type) {
+                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(14.dp)) }
+                            } else null
                         )
                     }
                 }
 
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    label = { Text("Document Title *") },
-                    placeholder = { Text("e.g. Aadhaar_Front_Back.pdf") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("add_doc_title_input"),
-                    shape = RoundedCornerShape(12.dp)
-                )
-
-                Text("Upload Options:", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
+                // 3. SOURCE SELECTOR
+                Text("3. Attach File / Photo *", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { cameraLauncher.launch() },
+                        onClick = { cameraLauncher.launch(null) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp)
                     ) {
                         Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Camera", fontSize = 12.sp)
+                        Text("Camera", fontSize = 11.sp, softWrap = false)
                     }
 
                     OutlinedButton(
@@ -511,7 +1138,7 @@ fun AddDocumentModal(
                     ) {
                         Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Gallery", fontSize = 12.sp)
+                        Text("Gallery", fontSize = 11.sp, softWrap = false)
                     }
 
                     OutlinedButton(
@@ -521,46 +1148,74 @@ fun AddDocumentModal(
                     ) {
                         Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Files", fontSize = 12.sp)
+                        Text("Files", fontSize = 11.sp, softWrap = false)
                     }
                 }
 
-                if (fileUriStr.isNotBlank()) {
+                // DISPLAY FILE DETAILS IMMEDIATELY AFTER SELECTION
+                savedFileInfo?.let { info ->
                     Surface(
-                        color = EmeraldGreenContainer,
-                        shape = RoundedCornerShape(10.dp),
+                        color = EmeraldGreenContainer.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, EmeraldGreenSecondary.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(20.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text("Attached via $uploadSource", style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = EmeraldGreenSecondary))
-                                Text(fileUriStr.takeLast(30), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = EmeraldGreenSecondary, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("File Attached ($uploadSourceText)", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, color = EmeraldGreenSecondary))
                             }
+                            HorizontalDivider(color = EmeraldGreenSecondary.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))
+                            DocDetailRow("File Name", info.fileName)
+                            DocDetailRow("Type", if (info.mimeType.contains("pdf", ignoreCase = true)) "PDF Document" else "Image / Photo")
+                            DocDetailRow("Size", info.fileSize)
+                            DocDetailRow("Client", selectedCustomer?.name ?: "None")
+                            DocDetailRow("Category", docType)
                         }
                     }
                 }
+
+                OutlinedTextField(
+                    value = customTitle,
+                    onValueChange = { customTitle = it },
+                    label = { Text("Display Title / File Name") },
+                    placeholder = { Text("e.g. Sagarika_Aadhaar.pdf") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("add_doc_title_input"),
+                    shape = RoundedCornerShape(12.dp)
+                )
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    val finalTitle = title.ifBlank { "${docType.replace(" ", "_")}_${System.currentTimeMillis().toString().takeLast(4)}" }
-                    val finalUri = fileUriStr.ifBlank { "content://vault/$finalTitle" }
                     val cust = selectedCustomer
+                    if (cust == null) {
+                        Toast.makeText(context, "Please select a client first", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    val fileInfo = savedFileInfo
+                    if (fileInfo == null) {
+                        Toast.makeText(context, "Please attach a file or take a photo first", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
 
+                    val finalTitle = customTitle.ifBlank { fileInfo.fileName }
                     val newDoc = DocumentEntity(
-                        customerId = cust?.id,
-                        customerName = cust?.name ?: "General Vault",
+                        customerId = cust.id,
+                        customerName = cust.name,
                         docType = docType,
                         title = finalTitle,
-                        fileUri = finalUri,
-                        fileSize = fileSizeStr,
-                        uploadDate = LocalDate.now().toString()
+                        fileUri = fileInfo.fileUri,
+                        fileSize = fileInfo.fileSize,
+                        uploadDate = LocalDate.now().toString(),
+                        createdAt = System.currentTimeMillis()
                     )
                     onSave(newDoc)
                 },
@@ -580,6 +1235,17 @@ fun AddDocumentModal(
 }
 
 @Composable
+private fun DocDetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
 fun DocumentPreviewModal(
     doc: DocumentEntity,
     onDismiss: () -> Unit,
@@ -587,13 +1253,23 @@ fun DocumentPreviewModal(
     onDelete: () -> Unit,
     onDownload: () -> Unit
 ) {
+    val file = remember(doc.fileUri) { if (doc.fileUri.isNotBlank()) File(doc.fileUri) else null }
+    val isImage = remember(doc.docType, doc.fileUri, doc.title) {
+        doc.docType == "Customer Photo" ||
+        doc.title.endsWith(".jpg", ignoreCase = true) ||
+        doc.title.endsWith(".jpeg", ignoreCase = true) ||
+        doc.title.endsWith(".png", ignoreCase = true) ||
+        doc.fileUri.endsWith(".jpg", ignoreCase = true) ||
+        doc.fileUri.endsWith(".png", ignoreCase = true)
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.FolderSpecial, contentDescription = null, tint = RoyalBluePrimary)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Document Vault Preview", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                Text("Document Vault Details", style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold))
             }
         },
         text = {
@@ -606,25 +1282,36 @@ fun DocumentPreviewModal(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(160.dp)
+                        .height(180.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = when (doc.docType) {
-                                    "Customer Photo" -> Icons.Default.AccountCircle
-                                    "Aadhaar Card" -> Icons.Default.Badge
-                                    "PAN Card" -> Icons.Default.CreditCard
-                                    "Policy Bond" -> Icons.Default.Description
-                                    else -> Icons.AutoMirrored.Filled.InsertDriveFile
-                                },
-                                contentDescription = null,
-                                modifier = Modifier.size(56.dp),
-                                tint = RoyalBluePrimary
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        if (isImage && file != null && file.exists()) {
+                            AsyncImage(
+                                model = file,
+                                contentDescription = doc.title,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(16.dp)),
+                                contentScale = ContentScale.Fit
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(doc.title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold))
-                            Text("Secured Vault Reference: ${doc.fileUri.takeLast(25)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(
+                                    imageVector = when (doc.docType) {
+                                        "Customer Photo" -> Icons.Default.AccountCircle
+                                        "Aadhaar Card" -> Icons.Default.Badge
+                                        "PAN Card" -> Icons.Default.CreditCard
+                                        "Policy Bond" -> Icons.Default.Description
+                                        else -> Icons.Default.InsertDriveFile
+                                    },
+                                    contentDescription = null,
+                                    modifier = Modifier.size(52.dp),
+                                    tint = RoyalBluePrimary
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(doc.title, style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Secured File: ${doc.fileUri.takeLast(25)}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
@@ -633,7 +1320,6 @@ fun DocumentPreviewModal(
                 DocDetailItem("Client Name", doc.customerName.ifEmpty { "N/A" })
                 DocDetailItem("Upload Date", doc.uploadDate)
                 DocDetailItem("File Size", doc.fileSize)
-                DocDetailItem("Cloud Storage Status", "Firebase Storage Encrypted")
             }
         },
         confirmButton = {
@@ -648,9 +1334,9 @@ fun DocumentPreviewModal(
                     colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Download")
+                    Text("Open File")
                 }
             }
         },
@@ -669,19 +1355,18 @@ fun ReplaceDocumentModal(
     onReplaceComplete: (DocumentEntity) -> Unit
 ) {
     val context = LocalContext.current
-    var newFileUri by remember { mutableStateOf("") }
-    var newSizeStr by remember { mutableStateOf("2.1 MB") }
+    var savedFileInfo by remember { mutableStateOf<SavedFileInfo?>(null) }
     var sourceText by remember { mutableStateOf("") }
 
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.TakePicturePreview()
     ) { bitmap: Bitmap? ->
         if (bitmap != null) {
-            val file = File(context.cacheDir, "replace_doc_${System.currentTimeMillis()}.jpg")
-            FileOutputStream(file).use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-            newFileUri = Uri.fromFile(file).toString()
-            newSizeStr = "${(file.length() / 1024).coerceAtLeast(150)} KB"
-            sourceText = "Camera"
+            val info = saveBitmapToInternalVault(context, bitmap, existingDoc.docType)
+            if (info != null) {
+                savedFileInfo = info
+                sourceText = "Camera Capture"
+            }
         }
     }
 
@@ -689,8 +1374,11 @@ fun ReplaceDocumentModal(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
-            newFileUri = uri.toString()
-            sourceText = "Gallery"
+            val info = saveUriToInternalVault(context, uri, existingDoc.docType)
+            if (info != null) {
+                savedFileInfo = info
+                sourceText = "Gallery / Files"
+            }
         }
     }
 
@@ -704,14 +1392,14 @@ fun ReplaceDocumentModal(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { cameraLauncher.launch() },
+                        onClick = { cameraLauncher.launch(null) },
                         modifier = Modifier.weight(1f),
                         colors = ButtonDefaults.buttonColors(containerColor = RoyalBluePrimary),
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Camera")
+                        Text("Camera", fontSize = 11.sp, softWrap = false)
                     }
 
                     Button(
@@ -722,22 +1410,23 @@ fun ReplaceDocumentModal(
                     ) {
                         Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Gallery/Files")
+                        Text("Gallery/Files", fontSize = 11.sp, softWrap = false)
                     }
                 }
 
-                if (newFileUri.isNotBlank()) {
-                    Text("New File Selected via $sourceText", style = MaterialTheme.typography.labelSmall.copy(color = EmeraldGreenSecondary, fontWeight = FontWeight.Bold))
+                savedFileInfo?.let { info ->
+                    Text("New File Selected via $sourceText (${info.fileSize})", style = MaterialTheme.typography.labelSmall.copy(color = EmeraldGreenSecondary, fontWeight = FontWeight.Bold))
                 }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    if (newFileUri.isNotBlank()) {
+                    val info = savedFileInfo
+                    if (info != null) {
                         val updatedDoc = existingDoc.copy(
-                            fileUri = newFileUri,
-                            fileSize = newSizeStr,
+                            fileUri = info.fileUri,
+                            fileSize = info.fileSize,
                             uploadDate = LocalDate.now().toString()
                         )
                         onReplaceComplete(updatedDoc)
@@ -755,24 +1444,6 @@ fun ReplaceDocumentModal(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
-}
-
-fun downloadDocument(context: Context, doc: DocumentEntity) {
-    val shareIntent = Intent().apply {
-        action = Intent.ACTION_SEND
-        putExtra(Intent.EXTRA_SUBJECT, "LIC Vault Document: ${doc.docType}")
-        putExtra(
-            Intent.EXTRA_TEXT,
-            "LIC Document Vault Record:\n" +
-                    "Type: ${doc.docType}\n" +
-                    "Title: ${doc.title}\n" +
-                    "Client: ${doc.customerName}\n" +
-                    "Upload Date: ${doc.uploadDate}\n" +
-                    "Reference: ${doc.fileUri}"
-        )
-        type = "text/plain"
-    }
-    context.startActivity(Intent.createChooser(shareIntent, "Download / Export Document Details"))
 }
 
 @Composable

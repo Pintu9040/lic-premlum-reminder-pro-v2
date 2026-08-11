@@ -203,346 +203,358 @@ fun CustomerListScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Box(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(MaterialTheme.colorScheme.background),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 100.dp)
             ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // TOP APP BAR / HEADER SECTION (Royal Blue Header with 20dp section spacing & padding)
-            Surface(
-                color = RoyalBluePrimary,
-                shadowElevation = 4.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // Title & Subtitle + Sort Dropdown
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Clients Directory",
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    fontSize = 22.sp,
-                                    letterSpacing = 0.15.sp
-                                )
-                            )
-                            Spacer(modifier = Modifier.height(3.dp))
-                            Text(
-                                text = "Manage your LIC customer portfolio",
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    fontSize = 12.5.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            )
-                        }
-
-                        // Sort Action Button
-                        Box {
-                            IconButton(
-                                onClick = { showSortMenu = true },
-                                modifier = Modifier
-                                    .clip(CircleShape)
-                                    .background(Color.White.copy(alpha = 0.15f))
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Sort,
-                                    contentDescription = "Sort Clients",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = showSortMenu,
-                                onDismissRequest = { showSortMenu = false }
-                            ) {
-                                CustomerSortOption.values().forEach { option ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                if (selectedSortOption == option) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Check,
-                                                        contentDescription = null,
-                                                        tint = RoyalBluePrimary,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                } else {
-                                                    Spacer(modifier = Modifier.width(24.dp))
-                                                }
-                                                Text(
-                                                    text = option.label,
-                                                    fontWeight = if (selectedSortOption == option) FontWeight.Bold else FontWeight.Normal
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            selectedSortOption = option
-                                            showSortMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 3. CUSTOMER COUNT PREMIUM SUMMARY CARD (20dp radius)
+                // TOP APP BAR / HEADER SECTION (Royal Blue Header with 20dp section spacing & padding)
+                item {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = Color.White.copy(alpha = 0.12f),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                        color = RoyalBluePrimary,
+                        shadowElevation = 4.dp,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        Column(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
+                            // Title & Subtitle + Sort Dropdown
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
+                                Column {
+                                    Text(
+                                        text = "Clients Directory",
+                                        style = MaterialTheme.typography.titleLarge.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White,
+                                            fontSize = 22.sp,
+                                            letterSpacing = 0.15.sp
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.height(3.dp))
+                                    Text(
+                                        text = "Manage your LIC customer portfolio",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            color = Color.White.copy(alpha = 0.85f),
+                                            fontSize = 12.5.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    )
+                                }
+
+                                // Sort Action Button
+                                Box {
+                                    IconButton(
+                                        onClick = { showSortMenu = true },
+                                        modifier = Modifier
+                                            .clip(CircleShape)
+                                            .background(Color.White.copy(alpha = 0.15f))
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Sort,
+                                            contentDescription = "Sort Clients",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    DropdownMenu(
+                                        expanded = showSortMenu,
+                                        onDismissRequest = { showSortMenu = false }
+                                    ) {
+                                        CustomerSortOption.values().forEach { option ->
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                                        if (selectedSortOption == option) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Check,
+                                                                contentDescription = null,
+                                                                tint = RoyalBluePrimary,
+                                                                modifier = Modifier.size(16.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(8.dp))
+                                                        } else {
+                                                            Spacer(modifier = Modifier.width(24.dp))
+                                                        }
+                                                        Text(
+                                                            text = option.label,
+                                                            fontWeight = if (selectedSortOption == option) FontWeight.Bold else FontWeight.Normal
+                                                        )
+                                                    }
+                                                },
+                                                onClick = {
+                                                    selectedSortOption = option
+                                                    showSortMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 3. CUSTOMER COUNT PREMIUM SUMMARY CARD (20dp radius)
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color.White.copy(alpha = 0.12f),
+                                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
                                     modifier = Modifier
-                                        .size(42.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            Brush.linearGradient(
-                                                colors = listOf(
-                                                    Color.White.copy(alpha = 0.25f),
-                                                    Color.White.copy(alpha = 0.15f)
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(42.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    Brush.linearGradient(
+                                                        colors = listOf(
+                                                            Color.White.copy(alpha = 0.25f),
+                                                            Color.White.copy(alpha = 0.15f)
+                                                        )
+                                                    )
+                                                ),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.People,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(22.dp)
+                                            )
+                                        }
+                                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            Text(
+                                                text = "👥 Total Clients",
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    color = Color.White.copy(alpha = 0.85f),
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold
                                                 )
                                             )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.People,
-                                        contentDescription = null,
-                                        tint = Color.White,
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                    Text(
-                                        text = "👥 Total Clients",
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            color = Color.White.copy(alpha = 0.85f),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.SemiBold
-                                        )
-                                    )
-                                    Text(
-                                        text = "${filteredCustomers.size} Customers",
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
-                                        )
-                                    )
+                                            Text(
+                                                text = "${filteredCustomers.size} Customers",
+                                                style = MaterialTheme.typography.titleMedium.copy(
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 16.sp
+                                                )
+                                            )
+                                        }
+                                    }
+
+                                    if (selectedFilterTab != CustomerFilterTab.ALL) {
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = AccentOrangeLight,
+                                            modifier = Modifier.padding(start = 8.dp)
+                                        ) {
+                                            Text(
+                                                text = selectedFilterTab.label,
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
 
-                            if (selectedFilterTab != CustomerFilterTab.ALL) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = AccentOrangeLight,
-                                    modifier = Modifier.padding(start = 8.dp)
-                                ) {
-                                    Text(
-                                        text = selectedFilterTab.label,
-                                        color = Color.White,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. SEARCH SECTION (56dp height SearchBar + Single Filter Icon)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.setSearchQuery(it) },
-                            placeholder = {
-                                Text(
-                                    text = "Search customer, mobile, policy...",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        color = Color.White.copy(alpha = 0.65f),
-                                        fontSize = 13.5.sp
-                                    )
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = Color.White.copy(alpha = 0.9f),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                if (searchQuery.isNotBlank()) {
-                                    IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                            // 2. SEARCH SECTION (56dp height SearchBar + Single Filter Icon)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { viewModel.setSearchQuery(it) },
+                                    placeholder = {
+                                        Text(
+                                            text = "Search customer, mobile, policy...",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                color = Color.White.copy(alpha = 0.65f),
+                                                fontSize = 13.5.sp
+                                            )
+                                        )
+                                    },
+                                    leadingIcon = {
                                         Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Clear",
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Search",
                                             tint = Color.White.copy(alpha = 0.9f),
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (searchQuery.isNotBlank()) {
+                                            IconButton(onClick = { viewModel.setSearchQuery("") }) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear",
+                                                    tint = Color.White.copy(alpha = 0.9f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = Color.White,
+                                        unfocusedBorderColor = Color.White.copy(alpha = 0.35f),
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = Color.White.copy(alpha = 0.15f),
+                                        unfocusedContainerColor = Color.White.copy(alpha = 0.1f)
+                                    ),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(56.dp)
+                                        .testTag("clients_directory_search_input")
+                                )
+
+                                // Single Filter Button at the end
+                                Surface(
+                                    onClick = { showFilterBottomSheet = true },
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (selectedSearchFilters.isNotEmpty() || selectedFilterTab != CustomerFilterTab.ALL) AccentOrangeLight else Color.White.copy(alpha = 0.15f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .testTag("clients_directory_filter_button")
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(
+                                            imageVector = Icons.Default.FilterList,
+                                            contentDescription = "Filter Options",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(22.dp)
                                         )
                                     }
                                 }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color.White,
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.35f),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedContainerColor = Color.White.copy(alpha = 0.15f),
-                                unfocusedContainerColor = Color.White.copy(alpha = 0.1f)
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(56.dp)
-                                .testTag("clients_directory_search_input")
-                        )
-
-                        // Single Filter Button at the end
-                        Surface(
-                            onClick = { showFilterBottomSheet = true },
-                            shape = RoundedCornerShape(16.dp),
-                            color = if (selectedSearchFilters.isNotEmpty() || selectedFilterTab != CustomerFilterTab.ALL) AccentOrangeLight else Color.White.copy(alpha = 0.15f),
-                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.35f)),
-                            modifier = Modifier
-                                .size(56.dp)
-                                .testTag("clients_directory_filter_button")
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    imageVector = Icons.Default.FilterList,
-                                    contentDescription = "Filter Options",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(22.dp)
-                                )
                             }
-                        }
-                    }
 
-                    // 4. FILTER CHIPS ROW (Equal height, equal padding, horizontal scrolling, selected chip gradient + glow effect)
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(horizontal = 2.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        items(CustomerFilterTab.values()) { filterTab ->
-                            val isSelected = selectedFilterTab == filterTab
-
-                            val animatedBgColor by animateColorAsState(
-                                targetValue = if (isSelected) RoyalBluePrimary else Color.White.copy(alpha = 0.15f),
-                                animationSpec = tween(durationMillis = 200),
-                                label = "chipBg"
-                            )
-                            val animatedBorderColor by animateColorAsState(
-                                targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
-                                animationSpec = tween(durationMillis = 200),
-                                label = "chipBorder"
-                            )
-
-                            Surface(
-                                onClick = { selectedFilterTab = filterTab },
-                                shape = RoundedCornerShape(20.dp),
-                                color = animatedBgColor,
-                                border = BorderStroke(1.dp, animatedBorderColor),
-                                shadowElevation = if (isSelected) 6.dp else 0.dp,
-                                modifier = Modifier
-                                    .height(40.dp)
-                                    .testTag("filter_chip_${filterTab.name.lowercase()}")
+                            // 4. FILTER CHIPS ROW (Equal height, equal padding, horizontal scrolling)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                contentPadding = PaddingValues(horizontal = 2.dp),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .then(
-                                            if (isSelected) {
-                                                Modifier.background(
-                                                    Brush.horizontalGradient(
-                                                        colors = listOf(RoyalBluePrimary, Color(0xFF2563EB))
-                                                    )
-                                                )
-                                            } else Modifier
-                                        )
-                                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = filterTab.label,
-                                        style = MaterialTheme.typography.labelMedium.copy(
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = Color.White,
-                                            fontSize = 13.sp
-                                        )
+                                items(CustomerFilterTab.values()) { filterTab ->
+                                    val isSelected = selectedFilterTab == filterTab
+
+                                    val animatedBgColor by animateColorAsState(
+                                        targetValue = if (isSelected) RoyalBluePrimary else Color.White.copy(alpha = 0.15f),
+                                        animationSpec = tween(durationMillis = 200),
+                                        label = "chipBg"
                                     )
+                                    val animatedBorderColor by animateColorAsState(
+                                        targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.3f),
+                                        animationSpec = tween(durationMillis = 200),
+                                        label = "chipBorder"
+                                    )
+
+                                    Surface(
+                                        onClick = { selectedFilterTab = filterTab },
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = animatedBgColor,
+                                        border = BorderStroke(1.dp, animatedBorderColor),
+                                        shadowElevation = if (isSelected) 6.dp else 0.dp,
+                                        modifier = Modifier
+                                            .height(40.dp)
+                                            .testTag("filter_chip_${filterTab.name.lowercase()}")
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .then(
+                                                    if (isSelected) {
+                                                        Modifier.background(
+                                                            Brush.horizontalGradient(
+                                                                colors = listOf(RoyalBluePrimary, Color(0xFF2563EB))
+                                                            )
+                                                        )
+                                                    } else Modifier
+                                                )
+                                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = filterTab.label,
+                                                style = MaterialTheme.typography.labelMedium.copy(
+                                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                    color = Color.White,
+                                                    fontSize = 13.sp
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // MAIN CONTENT AREA (20dp spacing, smooth fade animations)
-            when {
-                isLoading -> {
-                    CustomerSkeletonLoader()
-                }
-
-                isError -> {
-                    CustomerErrorCard(onRetry = {
-                        isError = false
-                        viewModel.triggerSync()
-                    })
-                }
-
-                customers.isEmpty() -> {
-                    CustomerEmptyState(onAddFirstCustomer = onAddCustomer)
-                }
-
-                filteredCustomers.isEmpty() -> {
-                    NoMatchingRecordsEmptyState(
-                        query = searchQuery,
-                        onResetFilters = {
-                            viewModel.clearAllFilters()
-                            selectedFilterTab = CustomerFilterTab.ALL
+                // MAIN CONTENT AREA
+                when {
+                    isLoading -> {
+                        item {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                CustomerSkeletonLoader()
+                            }
                         }
-                    )
-                }
+                    }
 
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
-                        contentPadding = PaddingValues(bottom = 88.dp)
-                    ) {
+                    isError -> {
+                        item {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                CustomerErrorCard(onRetry = {
+                                    isError = false
+                                    viewModel.triggerSync()
+                                })
+                            }
+                        }
+                    }
+
+                    customers.isEmpty() -> {
+                        item {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                CustomerEmptyState(onAddFirstCustomer = onAddCustomer)
+                            }
+                        }
+                    }
+
+                    filteredCustomers.isEmpty() -> {
+                        item {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                NoMatchingRecordsEmptyState(
+                                    query = searchQuery,
+                                    onResetFilters = {
+                                        viewModel.clearAllFilters()
+                                        selectedFilterTab = CustomerFilterTab.ALL
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
                         items(filteredCustomers, key = { it.id }) { customer ->
                             val customerPolicies = remember(policies, customer.id) {
                                 policies.filter { it.customerId == customer.id }
@@ -551,64 +563,28 @@ fun CustomerListScreen(
                                 payments.filter { it.customerId == customer.id }
                             }
 
-                            SwipeableCustomerItem(
-                                customer = customer,
-                                customerPolicies = customerPolicies,
-                                customerPayments = customerPayments,
-                                onClick = { onSelectCustomer(customer) },
-                                onRecordPayment = {
-                                    val activePolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) }
-                                        ?: customerPolicies.firstOrNull()
-                                    if (activePolicy != null) {
-                                        policyForPaymentCollection = activePolicy
-                                    }
-                                },
-                                onEditCustomer = { customerToEdit = customer },
-                                onDeleteCustomer = { customerToDelete = customer }
-                            )
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                SwipeableCustomerItem(
+                                    customer = customer,
+                                    customerPolicies = customerPolicies,
+                                    customerPayments = customerPayments,
+                                    onClick = { onSelectCustomer(customer) },
+                                    onRecordPayment = {
+                                        val activePolicy = customerPolicies.firstOrNull { it.status.equals("Active", ignoreCase = true) }
+                                            ?: customerPolicies.firstOrNull()
+                                        if (activePolicy != null) {
+                                            policyForPaymentCollection = activePolicy
+                                        }
+                                    },
+                                    onEditCustomer = { customerToEdit = customer },
+                                    onDeleteCustomer = { customerToDelete = customer }
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-
-        // 7. FLOATING ACTION BUTTON (Material 3 Extended FAB, 56dp height, hidden when no customers exist)
-        AnimatedVisibility(
-            visible = customers.isNotEmpty(),
-            enter = fadeIn() + slideInVertically(initialOffsetY = { it / 2 }),
-            exit = fadeOut() + slideOutVertically(targetOffsetY = { it / 2 }),
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp)
-        ) {
-            ExtendedFloatingActionButton(
-                onClick = onAddCustomer,
-                shape = RoundedCornerShape(28.dp),
-                containerColor = RoyalBluePrimary,
-                contentColor = Color.White,
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 6.dp),
-                modifier = Modifier
-                    .height(56.dp)
-                    .testTag("add_customer_fab")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PersonAdd,
-                    contentDescription = "Add Customer",
-                    tint = Color.White,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "Add Customer",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
-                )
-            }
-        }
-    }
 
     // Payment Collection Modal
     policyForPaymentCollection?.let { policy ->
@@ -684,7 +660,6 @@ fun CustomerListScreen(
             onDismiss = { showFilterBottomSheet = false }
         )
     }
-        }
     }
 }
 

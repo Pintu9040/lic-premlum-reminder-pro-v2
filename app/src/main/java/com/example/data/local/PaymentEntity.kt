@@ -18,6 +18,11 @@ data class PaymentEntity(
     val receiptNumber: String,
     val notes: String = "",
     val installmentDueDate: String = "",
+    val payerName: String = "",
+    val payerUpiId: String = "",
+    val utrNumber: String = "",
+    val verificationType: String = "Manually Recorded", // "Manually Recorded" or "Verified"
+    val paymentTime: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 

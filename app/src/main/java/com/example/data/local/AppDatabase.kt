@@ -19,7 +19,7 @@ import kotlinx.coroutines.launch
         AgentProfileEntity::class,
         FollowUpEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -40,6 +40,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE payments ADD COLUMN payerName TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE payments ADD COLUMN payerUpiId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE payments ADD COLUMN utrNumber TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE payments ADD COLUMN verificationType TEXT NOT NULL DEFAULT 'Manually Recorded'")
+                db.execSQL("ALTER TABLE payments ADD COLUMN paymentTime TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -48,7 +58,7 @@ abstract class AppDatabase : RoomDatabase() {
                     "lic_reminder_pro_db"
                 )
                     .addCallback(DatabaseCallback())
-                    .addMigrations(MIGRATION_7_8)
+                    .addMigrations(MIGRATION_7_8, MIGRATION_8_9)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
@@ -244,6 +254,18 @@ abstract class AppDatabase : RoomDatabase() {
                     customerId = c1Id,
                     customerName = "Rajesh Sharma",
                     policyId = p1Id,
+                    docType = "PAN Card",
+                    title = "Rajesh_PAN_Card.jpg",
+                    fileUri = "content://vault/Rajesh_PAN_Card.jpg",
+                    fileSize = "820 KB",
+                    uploadDate = "2026-01-11"
+                )
+            )
+            documentDao.insertDocument(
+                DocumentEntity(
+                    customerId = c1Id,
+                    customerName = "Rajesh Sharma",
+                    policyId = p1Id,
                     docType = "Policy Bond",
                     title = "JeevanLabh_Bond_895412036.pdf",
                     fileUri = "content://vault/JeevanLabh_Bond_895412036.pdf",
@@ -261,6 +283,54 @@ abstract class AppDatabase : RoomDatabase() {
                     fileUri = "content://vault/Priya_PAN_Scan.jpg",
                     fileSize = "850 KB",
                     uploadDate = "2026-02-01"
+                )
+            )
+            documentDao.insertDocument(
+                DocumentEntity(
+                    customerId = c2Id,
+                    customerName = "Priya Verma",
+                    policyId = p2Id,
+                    docType = "Aadhaar Card",
+                    title = "Priya_Aadhaar_Front_Back.pdf",
+                    fileUri = "content://vault/Priya_Aadhaar_Front_Back.pdf",
+                    fileSize = "1.8 MB",
+                    uploadDate = "2026-02-02"
+                )
+            )
+            documentDao.insertDocument(
+                DocumentEntity(
+                    customerId = c2Id,
+                    customerName = "Priya Verma",
+                    policyId = p2Id,
+                    docType = "Policy Bond",
+                    title = "JeevanUmang_Bond_774125896.pdf",
+                    fileUri = "content://vault/JeevanUmang_Bond_774125896.pdf",
+                    fileSize = "2.9 MB",
+                    uploadDate = "2026-02-03"
+                )
+            )
+            documentDao.insertDocument(
+                DocumentEntity(
+                    customerId = c3Id,
+                    customerName = "Amitabh Gupta",
+                    policyId = p3Id,
+                    docType = "Customer Photo",
+                    title = "Amitabh_Passport_Photo.jpg",
+                    fileUri = "content://vault/Amitabh_Passport_Photo.jpg",
+                    fileSize = "420 KB",
+                    uploadDate = "2026-01-20"
+                )
+            )
+            documentDao.insertDocument(
+                DocumentEntity(
+                    customerId = c3Id,
+                    customerName = "Amitabh Gupta",
+                    policyId = p3Id,
+                    docType = "Policy Bond",
+                    title = "Endowment_Policy_663214789.pdf",
+                    fileUri = "content://vault/Endowment_Policy_663214789.pdf",
+                    fileSize = "2.8 MB",
+                    uploadDate = "2026-01-22"
                 )
             )
 

@@ -148,7 +148,12 @@ object AppSettingsManager {
 
             isAppLockEnabled = prefs.getBoolean("app_lock_enabled", true),
             isPinLockEnabled = prefs.getBoolean("pin_lock_enabled", true),
-            pinCode = prefs.getString("pin_code", "1234") ?: "1234",
+            pinCode = com.example.util.SecurePreferences.getSecureToken(context, "encrypted_pin_code").ifBlank {
+                val legacy = prefs.getString("pin_code", "1234") ?: "1234"
+                com.example.util.SecurePreferences.saveSecureToken(context, "encrypted_pin_code", legacy)
+                prefs.edit().remove("pin_code").apply()
+                legacy
+            },
             isFingerprintEnabled = com.example.util.SecurityUtils.isBiometricEnabled(context),
             isFaceUnlockEnabled = prefs.getBoolean("face_unlock_enabled", false),
             selectedAutoLockTime = prefs.getString("auto_lock_time", "5 Min") ?: "5 Min"
@@ -203,7 +208,8 @@ object AppSettingsManager {
 
                 putBoolean("app_lock_enabled", settings.isAppLockEnabled)
                 putBoolean("pin_lock_enabled", settings.isPinLockEnabled)
-                putString("pin_code", settings.pinCode)
+                remove("pin_code") // Do not store plain text PIN in SharedPreferences
+                com.example.util.SecurePreferences.saveSecureToken(context, "encrypted_pin_code", settings.pinCode)
                 putBoolean("fingerprint_enabled", settings.isFingerprintEnabled)
                 putBoolean("face_unlock_enabled", settings.isFaceUnlockEnabled)
                 putString("auto_lock_time", settings.selectedAutoLockTime)

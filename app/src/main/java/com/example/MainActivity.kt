@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.local.CustomerEntity
 import com.example.data.local.PolicyEntity
 import com.example.ui.LicViewModel
+import com.example.ui.payment.PaymentQrScreen
 import com.example.ui.auth.*
 import com.example.ui.calendar.CalendarScreen
 import com.example.ui.customer.*
@@ -180,6 +181,11 @@ sealed class ScreenDestination {
     object RecordPayment : ScreenDestination()
     object Payments : ScreenDestination()
     data class CustomerPaymentHistory(val customer: CustomerEntity) : ScreenDestination()
+    data class PaymentQr(
+        val policy: PolicyEntity? = null,
+        val customer: CustomerEntity? = null,
+        val initialAmount: Double = 0.0
+    ) : ScreenDestination()
     object Reports : ScreenDestination()
     object Documents : ScreenDestination()
     object Settings : ScreenDestination()
@@ -225,7 +231,7 @@ fun MainAppContent(
         ScreenDestination.Customers, is ScreenDestination.CustomerDetail, is ScreenDestination.CustomerPaymentHistory -> AppNavigationTab.CUSTOMERS
         ScreenDestination.Policies, is ScreenDestination.PolicyDetail, ScreenDestination.AddPolicy -> AppNavigationTab.POLICIES
         ScreenDestination.Reminders, ScreenDestination.Calendar -> AppNavigationTab.REMINDERS
-        ScreenDestination.RecordPayment, ScreenDestination.Payments -> AppNavigationTab.PAYMENTS
+        ScreenDestination.RecordPayment, ScreenDestination.Payments, is ScreenDestination.PaymentQr -> AppNavigationTab.PAYMENTS
         ScreenDestination.Reports -> AppNavigationTab.REPORTS
         ScreenDestination.Documents -> AppNavigationTab.DOCUMENTS
         ScreenDestination.Settings -> AppNavigationTab.SETTINGS
@@ -431,6 +437,9 @@ fun MainAppContent(
                             onCollectPremium = { policyForPaymentCollection = it },
                             onNavigateToCustomerPaymentHistory = { selectedCustomer ->
                                 navigateTo(ScreenDestination.CustomerPaymentHistory(selectedCustomer))
+                            },
+                            onNavigateToPaymentQr = { pol, cust, amt ->
+                                navigateTo(ScreenDestination.PaymentQr(pol, cust, amt))
                             }
                         )
                     }
@@ -493,7 +502,11 @@ fun MainAppContent(
 
                     is ScreenDestination.Calendar -> {
                         CalendarScreen(
-                            onBackClick = { handleBackPress() }
+                            viewModel = licViewModel,
+                            onBackClick = { handleBackPress() },
+                            onCollectPremium = { policy -> policyForPaymentCollection = policy },
+                            onViewPolicyDetail = { policy -> navigateTo(ScreenDestination.PolicyDetail(policy)) },
+                            onNavigateToCustomerDetail = { cust -> navigateTo(ScreenDestination.CustomerDetail(cust)) }
                         )
                     }
 
@@ -517,6 +530,17 @@ fun MainAppContent(
                         PaymentHistoryScreen(
                             viewModel = licViewModel,
                             initialCustomer = cust,
+                            onBack = { handleBackPress() }
+                        )
+                    }
+
+                    is ScreenDestination.PaymentQr -> {
+                        val dest = currentDestination as ScreenDestination.PaymentQr
+                        PaymentQrScreen(
+                            viewModel = licViewModel,
+                            initialPolicy = dest.policy,
+                            initialCustomer = dest.customer,
+                            initialAmount = dest.initialAmount,
                             onBack = { handleBackPress() }
                         )
                     }

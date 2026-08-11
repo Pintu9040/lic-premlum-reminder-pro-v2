@@ -82,9 +82,21 @@ fun DocumentVaultScreen(
     viewModel: LicViewModel? = null,
     onBack: () -> Unit = {}
 ) {
+    if (viewModel != null) {
+        DocumentListScreen(viewModel = viewModel, initialCustomer = customer)
+        return
+    }
+
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    DisposableEffect(Unit) {
+        com.example.util.SecurityUtils.setSecureFlag(context, true)
+        onDispose {
+            com.example.util.SecurityUtils.setSecureFlag(context, false)
+        }
+    }
 
     // SharedPreferences for local persistence
     val prefs = remember { context.getSharedPreferences("vault_documents_pref", Context.MODE_PRIVATE) }
@@ -208,61 +220,85 @@ fun DocumentVaultScreen(
     var showSourceBottomSheet by remember { mutableStateOf(false) }
     var pendingDocToUpload by remember { mutableStateOf<VaultDocumentModel?>(null) }
 
-    // File Processing logic
+    // File Processing logic with strict MIME, size validation and private copy
     val processSelectedFile: (Uri, String) -> Unit = { uri, sourceType ->
         val target = pendingDocToUpload
         if (target != null) {
-            val uriStr = uri.toString()
-            val formattedDate = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date())
+            val mimeType = context.contentResolver.getType(uri) ?: ""
+            if (sourceType == "PDF" && mimeType.isNotBlank() && !mimeType.equals("application/pdf", ignoreCase = true)) {
+                Toast.makeText(context, "Invalid file format: Only PDF files are allowed.", Toast.LENGTH_LONG).show()
+            } else {
+                val formattedDate = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date())
+                var displayName: String? = null
+                var calculatedSizeStr = if (sourceType == "PDF") "1.5 MB • PDF" else "950 KB • JPG"
+                var fileBytes = 0L
 
-            var displayName: String? = null
-            var calculatedSizeStr = if (sourceType == "PDF") "1.5 MB • PDF" else "950 KB • JPG"
-
-            try {
-                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                    val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    if (cursor.moveToFirst()) {
-                        if (nameIdx != -1) displayName = cursor.getString(nameIdx)
-                        if (sizeIdx != -1) {
-                            val bytes = cursor.getLong(sizeIdx)
-                            if (bytes > 0) {
-                                val kb = bytes / 1024
-                                val mb = kb / 1024.0
-                                calculatedSizeStr = if (mb >= 1.0) String.format(Locale.US, "%.1f MB", mb) else "$kb KB"
-                                calculatedSizeStr += if (sourceType == "PDF") " • PDF" else " • JPG"
+                try {
+                    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                        val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (cursor.moveToFirst()) {
+                            if (nameIdx != -1) displayName = cursor.getString(nameIdx)
+                            if (sizeIdx != -1) {
+                                fileBytes = cursor.getLong(sizeIdx)
+                                if (fileBytes > 0) {
+                                    val kb = fileBytes / 1024
+                                    val mb = kb / 1024.0
+                                    calculatedSizeStr = if (mb >= 1.0) String.format(Locale.US, "%.1f MB", mb) else "$kb KB"
+                                    calculatedSizeStr += if (sourceType == "PDF") " • PDF" else " • JPG"
+                                }
                             }
                         }
                     }
+                } catch (_: Exception) {}
+
+                if (fileBytes > 10 * 1024 * 1024L) { // 10MB limit
+                    Toast.makeText(context, "File size exceeds 10MB limit. Please upload a smaller file.", Toast.LENGTH_LONG).show()
+                } else {
+                    // Copy file to internal private storage
+                    val privateDir = File(context.filesDir, "vault_docs")
+                    if (!privateDir.exists()) privateDir.mkdirs()
+                    val ext = if (sourceType == "PDF") "pdf" else "jpg"
+                    val privateFile = File(privateDir, "doc_${target.id}_${System.currentTimeMillis()}.$ext")
+                    var savedUriStr = uri.toString()
+
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(privateFile).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        savedUriStr = Uri.fromFile(privateFile).toString()
+                    } catch (e: Exception) {
+                        android.util.Log.e("DocumentVault", "Failed copying file to private storage: ${e.localizedMessage}")
+                    }
+
+                    val finalFileName = displayName ?: "${target.title.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}.$ext"
+
+                    val updatedDoc = target.copy(
+                        isUploaded = true,
+                        uploadDate = formattedDate,
+                        fileSize = calculatedSizeStr,
+                        fileUri = savedUriStr,
+                        fileName = finalFileName
+                    )
+
+                    val exists = documentList.any { it.id == target.id }
+                    documentList = if (exists) {
+                        documentList.map { if (it.id == target.id) updatedDoc else it }
+                    } else {
+                        documentList + updatedDoc
+                    }
+
+                    saveDocToPrefs(updatedDoc)
+
+                    showSourceBottomSheet = false
+                    pendingDocToUpload = null
+
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar("Document uploaded securely.")
+                    }
                 }
-            } catch (e: Exception) {
-                // Ignore query exceptions
-            }
-
-            val finalFileName = displayName ?: "${target.title.lowercase().replace(" ", "_")}_${System.currentTimeMillis()}.${if (sourceType == "PDF") "pdf" else "jpg"}"
-
-            val updatedDoc = target.copy(
-                isUploaded = true,
-                uploadDate = formattedDate,
-                fileSize = calculatedSizeStr,
-                fileUri = uriStr,
-                fileName = finalFileName
-            )
-
-            val exists = documentList.any { it.id == target.id }
-            documentList = if (exists) {
-                documentList.map { if (it.id == target.id) updatedDoc else it }
-            } else {
-                documentList + updatedDoc
-            }
-
-            saveDocToPrefs(updatedDoc)
-
-            showSourceBottomSheet = false
-            pendingDocToUpload = null
-
-            coroutineScope.launch {
-                snackbarHostState.showSnackbar("Document uploaded successfully.")
             }
         }
     }

@@ -23,8 +23,7 @@ class CloudSyncWorker(
 
         return try {
             val db = AppDatabase.getDatabase(applicationContext)
-            val auth = FirebaseAuth.getInstance()
-            val user = auth.currentUser
+            val user = try { FirebaseAuth.getInstance().currentUser } catch (e: Throwable) { null }
             val uid = user?.uid ?: syncManager.getOrEnsureUid()
 
             if (uid.isNotBlank()) {

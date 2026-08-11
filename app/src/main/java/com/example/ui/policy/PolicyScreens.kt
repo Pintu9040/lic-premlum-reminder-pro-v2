@@ -188,10 +188,20 @@ fun getDaysLeftBadgeInfo(dueDateStr: String, status: String): DaysLeftInfo {
     }
 }
 
+data class InstallmentProgressInfo(
+    val completedInstallments: Int,
+    val totalInstallments: Int,
+    val currentInstallmentPaid: Double,
+    val currentInstallmentOutstanding: Double,
+    val premiumAmount: Double,
+    val progressFraction: Float,
+    val overallPercentage: Float
+)
+
 fun calculateInstallmentProgress(
     policy: PolicyEntity,
     policyPayments: List<PaymentEntity>
-): Pair<Int, Int> {
+): InstallmentProgressInfo {
     val termYears = if (policy.policyTerm > 0) policy.policyTerm else 20
     val pptYears = if (policy.premiumPayingTerm > 0) policy.premiumPayingTerm else termYears
     val mode = policy.premiumMode.uppercase()
@@ -205,14 +215,57 @@ fun calculateInstallmentProgress(
     }
     val totalInstallments = (pptYears * installmentsPerYear).coerceAtLeast(1)
 
-    val totalPaidAmount = policyPayments.sumOf { it.paidAmount }
-    val paidFromAmount = if (policy.premiumAmount > 0) {
-        (totalPaidAmount / policy.premiumAmount).toInt()
-    } else 0
-    val paidFromCount = policyPayments.size
-    val paidInstallments = maxOf(paidFromAmount, paidFromCount).coerceIn(0, totalInstallments)
+    val totalValidPaidAmount = policyPayments.sumOf { it.paidAmount }
+    val premiumAmount = policy.premiumAmount
 
-    return Pair(paidInstallments, totalInstallments)
+    val completedInstallments: Int
+    val currentInstallmentPaid: Double
+    val currentInstallmentOutstanding: Double
+
+    if (premiumAmount <= 0.0) {
+        completedInstallments = 0
+        currentInstallmentPaid = 0.0
+        currentInstallmentOutstanding = 0.0
+    } else {
+        val rawCompleted = kotlin.math.floor(totalValidPaidAmount / premiumAmount).toInt()
+        completedInstallments = rawCompleted.coerceIn(0, totalInstallments)
+
+        if (completedInstallments >= totalInstallments) {
+            currentInstallmentPaid = premiumAmount
+            currentInstallmentOutstanding = 0.0
+        } else {
+            val remainder = totalValidPaidAmount - (completedInstallments * premiumAmount)
+            if (remainder > 0.0) {
+                currentInstallmentPaid = remainder
+                currentInstallmentOutstanding = (premiumAmount - remainder).coerceAtLeast(0.0)
+            } else {
+                if (completedInstallments == 0) {
+                    currentInstallmentPaid = 0.0
+                    currentInstallmentOutstanding = premiumAmount
+                } else {
+                    currentInstallmentPaid = premiumAmount
+                    currentInstallmentOutstanding = 0.0
+                }
+            }
+        }
+    }
+
+    val totalExpected = totalInstallments * premiumAmount
+    val progressFraction = if (totalExpected > 0.0) {
+        (totalValidPaidAmount / totalExpected).toFloat().coerceIn(0f, 1f)
+    } else 0f
+
+    val overallPercentage = progressFraction * 100f
+
+    return InstallmentProgressInfo(
+        completedInstallments = completedInstallments,
+        totalInstallments = totalInstallments,
+        currentInstallmentPaid = currentInstallmentPaid,
+        currentInstallmentOutstanding = currentInstallmentOutstanding,
+        premiumAmount = premiumAmount,
+        progressFraction = progressFraction,
+        overallPercentage = overallPercentage
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1123,10 +1176,9 @@ fun PolicyCard(
     val context = LocalContext.current
     val (planNameOnly, planCode) = remember(policy.planName) { parsePlanDetails(policy.planName) }
     val daysLeftInfo = remember(policy.dueDate, policy.status) { getDaysLeftBadgeInfo(policy.dueDate, policy.status) }
-    val (paidInstallments, totalInstallments) = remember(policy, policyPayments) {
+    val progressInfo = remember(policy, policyPayments) {
         calculateInstallmentProgress(policy, policyPayments)
     }
-    val progressFraction = if (totalInstallments > 0) (paidInstallments.toFloat() / totalInstallments.toFloat()).coerceIn(0f, 1f) else 0f
 
     val statusColor = when {
         policy.status.equals("Active", ignoreCase = true) -> EmeraldGreenSecondary
@@ -1397,6 +1449,12 @@ fun PolicyCard(
             Spacer(modifier = Modifier.height(10.dp))
 
             // PREMIUM PROGRESS BAR
+            val formattedPercentage = if (progressInfo.overallPercentage % 1f == 0f) {
+                "%.0f%%".format(progressInfo.overallPercentage)
+            } else {
+                "%.2f%%".format(progressInfo.overallPercentage)
+            }
+
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -1411,7 +1469,7 @@ fun PolicyCard(
                         )
                     )
                     Text(
-                        text = "$paidInstallments / $totalInstallments Paid (${(progressFraction * 100).toInt()}%)",
+                        text = "${progressInfo.completedInstallments} / ${progressInfo.totalInstallments} Paid ($formattedPercentage)",
                         style = MaterialTheme.typography.labelSmall.copy(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -1421,7 +1479,7 @@ fun PolicyCard(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = { progressFraction },
+                    progress = { progressInfo.progressFraction },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp)
@@ -1429,6 +1487,29 @@ fun PolicyCard(
                     color = RoyalBluePrimary,
                     trackColor = RoyalBlueContainer.copy(alpha = 0.5f)
                 )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "₹${"%.0f".format(progressInfo.currentInstallmentPaid)} / ₹${"%.0f".format(progressInfo.premiumAmount)} Current Premium",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    )
+                    Text(
+                        text = "₹${"%.0f".format(progressInfo.currentInstallmentOutstanding)} Outstanding",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (progressInfo.currentInstallmentOutstanding > 0) ErrorRed else EmeraldGreenSecondary
+                        )
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -1700,6 +1781,73 @@ fun PolicyDetailScreen(
                         if (lastPayment != null) "₹${"%.2f".format(lastPayment.paidAmount)} on ${lastPayment.paymentDate}" else "No payments recorded"
                     )
                     DetailItem("Total Premium Paid", "₹${"%.2f".format(totalPaid)}")
+
+                    val detailProgressInfo = remember(policy, policyPayments) {
+                        calculateInstallmentProgress(policy, policyPayments)
+                    }
+                    val detailFormattedPct = if (detailProgressInfo.overallPercentage % 1f == 0f) {
+                        "%.0f%%".format(detailProgressInfo.overallPercentage)
+                    } else {
+                        "%.2f%%".format(detailProgressInfo.overallPercentage)
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Installment Progress",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                            Text(
+                                text = "${detailProgressInfo.completedInstallments} / ${detailProgressInfo.totalInstallments} Paid ($detailFormattedPct)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = EmeraldGreenSecondary
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { detailProgressInfo.progressFraction },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(CircleShape),
+                            color = RoyalBluePrimary,
+                            trackColor = RoyalBlueContainer.copy(alpha = 0.5f)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "₹${"%.0f".format(detailProgressInfo.currentInstallmentPaid)} / ₹${"%.0f".format(detailProgressInfo.premiumAmount)} Current Premium",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            )
+                            Text(
+                                text = "₹${"%.0f".format(detailProgressInfo.currentInstallmentOutstanding)} Outstanding",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (detailProgressInfo.currentInstallmentOutstanding > 0) ErrorRed else EmeraldGreenSecondary
+                                )
+                            )
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(20.dp))
 

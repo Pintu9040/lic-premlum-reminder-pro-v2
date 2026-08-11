@@ -77,19 +77,6 @@ class FirebaseSyncManager(private val context: Context) {
                     Log.d("FirestoreSync", "Resolved active FirebaseAuth UID: ${user.uid}")
                     return user.uid
                 }
-                try {
-                    Log.d("FirestoreSync", "No active FirebaseAuth currentUser. Attempting anonymous sign-in to ensure Firebase Auth session...")
-                    val res = kotlinx.coroutines.withTimeoutOrNull(3000L) {
-                        currentAuth.signInAnonymously().await()
-                    }
-                    val anonUid = res?.user?.uid
-                    if (!anonUid.isNullOrBlank()) {
-                        Log.i("FirestoreSync", "Firebase anonymous sign-in succeeded. Authenticated UID: $anonUid")
-                        return anonUid
-                    }
-                } catch (e: Throwable) {
-                    Log.w("FirestoreSync", "Firebase anonymous sign-in failed or unavailable: ${e.localizedMessage}")
-                }
             }
         } catch (e: Throwable) {
             Log.w("FirestoreSync", "Error ensuring Firebase UID: ${e.localizedMessage}")

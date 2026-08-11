@@ -436,9 +436,32 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         isAnonymous = true
                     )
                 }
-            } catch (e: Exception) {
-                Log.e("AuthViewModel", "Anonymous login error: ${e.localizedMessage}", e)
-                _authState.value = AuthState.Error("Guest login failed: ${e.localizedMessage}")
+            } catch (e: Throwable) {
+                Log.w("AuthViewModel", "Anonymous login error: ${e.localizedMessage}. Falling back to local guest mode.")
+                try {
+                    val localUid = "guest_local_${System.currentTimeMillis()}"
+                    val profile = AgentProfileEntity(
+                        id = 1,
+                        agentName = "Guest Agent",
+                        agencyCode = "GUEST-89421",
+                        branchName = "Guest Branch",
+                        email = "guest@licreminderpro.com",
+                        mobile = ""
+                    )
+                    db.agentDao().saveAgentProfile(profile)
+                    _authState.value = AuthState.LoggedIn(
+                        uid = localUid,
+                        email = profile.email,
+                        name = profile.agentName,
+                        agencyCode = profile.agencyCode,
+                        branchName = profile.branchName,
+                        mobile = profile.mobile,
+                        isEmailVerified = true,
+                        isAnonymous = true
+                    )
+                } catch (dbErr: Throwable) {
+                    _authState.value = AuthState.Error("Guest login failed: ${e.localizedMessage}")
+                }
             }
         }
     }

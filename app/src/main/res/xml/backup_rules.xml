@@ -6,8 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="lic_secure_prefs.xml"/>
+    <exclude domain="sharedpref" path="vault_documents_pref.xml"/>
+    <exclude domain="sharedpref" path="lic_app_settings_prefs.xml"/>
 </full-backup-content>

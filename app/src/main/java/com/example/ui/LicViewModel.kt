@@ -614,24 +614,44 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         receiptNo: String = "",
         paymentDate: String = "",
         notes: String = "",
+        payerName: String = "",
+        payerUpiId: String = "",
+        utrNumber: String = "",
+        verificationType: String = "Manually Recorded",
+        paymentTime: String = "",
         onSuccess: () -> Unit = {}
     ) {
         viewModelScope.launch {
-            val dateStr = if (paymentDate.isNotBlank()) paymentDate else LocalDate.now().toString()
-            val generatedReceipt = if (receiptNo.isNotBlank()) receiptNo else "REC-${System.currentTimeMillis()}"
+            // Strict Input Validation
+            if (!paidAmount.isFinite() || paidAmount <= 0.0 || paidAmount > 1_000_000_000.0) {
+                android.util.Log.e("LicViewModel", "collectPremium rejected due to invalid paidAmount: $paidAmount")
+                return@launch
+            }
+            val sanitizedLateFee = if (lateFee.isFinite() && lateFee >= 0.0) lateFee else 0.0
+
+            val dateStr = if (paymentDate.isNotBlank()) paymentDate.trim() else LocalDate.now().toString()
+            val generatedReceipt = if (receiptNo.isNotBlank()) receiptNo.trim() else "REC-${System.currentTimeMillis()}"
+            val timeStr = if (paymentTime.isNotBlank()) paymentTime.trim() else try {
+                java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"))
+            } catch (e: Exception) { "" }
 
             val payment = PaymentEntity(
                 policyId = policy.id,
-                policyNumber = policy.policyNumber,
+                policyNumber = policy.policyNumber.trim(),
                 customerId = policy.customerId,
-                customerName = policy.customerName,
+                customerName = policy.customerName.trim(),
                 paidAmount = paidAmount,
-                lateFee = lateFee,
+                lateFee = sanitizedLateFee,
                 paymentDate = dateStr,
-                paymentMode = paymentMode,
+                paymentMode = paymentMode.trim(),
                 receiptNumber = generatedReceipt,
-                notes = notes,
-                installmentDueDate = policy.dueDate
+                notes = notes.trim().take(500),
+                installmentDueDate = policy.dueDate.trim(),
+                payerName = payerName.trim().take(100),
+                payerUpiId = payerUpiId.trim().take(100),
+                utrNumber = utrNumber.trim().take(100),
+                verificationType = verificationType.trim(),
+                paymentTime = timeStr
             )
 
             repository.collectPremium(payment)

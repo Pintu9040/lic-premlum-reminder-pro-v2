@@ -5,6 +5,9 @@ import android.util.Log
 import com.example.notifications.NotificationEngine
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 
 class LicApplication : Application() {
 
@@ -33,6 +36,7 @@ class LicApplication : Application() {
                 Log.i("LicApplication", "FirebaseApp already initialized")
                 isFirebaseInitialized = true
                 firebaseInitializationError = null
+                initAppCheck()
                 return
             }
 
@@ -82,6 +86,7 @@ class LicApplication : Application() {
                 isFirebaseInitialized = true
                 firebaseInitializationError = null
                 Log.i("LicApplication", "FirebaseApp successfully initialized: ${app.name}")
+                initAppCheck()
             } else {
                 isFirebaseInitialized = false
                 firebaseInitializationError = "FirebaseApp.initializeApp returned null"
@@ -91,6 +96,25 @@ class LicApplication : Application() {
             isFirebaseInitialized = false
             firebaseInitializationError = e.localizedMessage ?: e.message ?: "Firebase initialization failed"
             Log.e("LicApplication", "Failed to initialize FirebaseApp: ${e.localizedMessage}", e)
+        }
+    }
+
+    private fun initAppCheck() {
+        try {
+            val firebaseAppCheck = FirebaseAppCheck.getInstance()
+            if (BuildConfig.DEBUG) {
+                firebaseAppCheck.installAppCheckProviderFactory(
+                    DebugAppCheckProviderFactory.getInstance()
+                )
+                Log.i("LicApplication", "Firebase AppCheck installed DebugAppCheckProviderFactory")
+            } else {
+                firebaseAppCheck.installAppCheckProviderFactory(
+                    PlayIntegrityAppCheckProviderFactory.getInstance()
+                )
+                Log.i("LicApplication", "Firebase AppCheck installed PlayIntegrityAppCheckProviderFactory")
+            }
+        } catch (e: Throwable) {
+            Log.w("LicApplication", "Firebase AppCheck initialization skipped or failed: ${e.localizedMessage}")
         }
     }
 }
