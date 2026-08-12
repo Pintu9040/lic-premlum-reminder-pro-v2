@@ -58,6 +58,10 @@ object SecurityUtils {
     }
 
     fun setSecureFlag(context: Context, enable: Boolean) {
+        if (com.example.BuildConfig.DEBUG) {
+            Log.i(TAG, "FLAG_SECURE bypassed in DEBUG build for emulator/preview video stream compatibility.")
+            return
+        }
         try {
             val activity = findActivity(context)
             if (activity != null && !activity.isFinishing && !activity.isDestroyed) {

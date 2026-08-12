@@ -622,252 +622,261 @@ fun PolicyListScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
+                    .background(MaterialTheme.colorScheme.background),
+                contentPadding = PaddingValues(bottom = 150.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-// SEARCH & FILTERS HEADER SECTION
-            Surface(
-                color = RoyalBluePrimary,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                    if (isSearchExpanded) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.setSearchQuery(it) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .testTag("policy_list_search_input"),
-                            placeholder = {
-                                Text(
-                                    text = "Search by Policy #, Customer Name, Mobile, Plan...",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        color = Color.White.copy(alpha = 0.85f),
-                                        fontSize = 13.sp
+                // SEARCH & FILTERS HEADER SECTION ITEM
+                item(key = "policy_list_header") {
+                    Surface(
+                        color = RoyalBluePrimary,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                            if (isSearchExpanded) {
+                                OutlinedTextField(
+                                    value = searchQuery,
+                                    onValueChange = { viewModel.setSearchQuery(it) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(52.dp)
+                                        .testTag("policy_list_search_input"),
+                                    placeholder = {
+                                        Text(
+                                            text = "Search by Policy #, Customer Name, Mobile, Plan...",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                color = Color.White.copy(alpha = 0.85f),
+                                                fontSize = 13.sp
+                                            )
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Default.Search,
+                                            contentDescription = "Search",
+                                            tint = AccentOrangeLight,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    },
+                                    trailingIcon = {
+                                        if (searchQuery.isNotEmpty()) {
+                                            IconButton(
+                                                onClick = { viewModel.setSearchQuery("") },
+                                                modifier = Modifier.size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear",
+                                                    tint = Color.White.copy(alpha = 0.9f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedContainerColor = NeutralSurfaceDark,
+                                        unfocusedContainerColor = NeutralSurfaceDark,
+                                        focusedBorderColor = AccentOrangeLight,
+                                        unfocusedBorderColor = NeutralBorderDark,
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White
                                     )
                                 )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = "Search",
-                                    tint = AccentOrangeLight,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(
-                                        onClick = { viewModel.setSearchQuery("") },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Close,
-                                            contentDescription = "Clear",
-                                            tint = Color.White.copy(alpha = 0.9f),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = NeutralSurfaceDark,
-                                unfocusedContainerColor = NeutralSurfaceDark,
-                                focusedBorderColor = AccentOrangeLight,
-                                unfocusedBorderColor = NeutralBorderDark,
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                    }
+                                Spacer(modifier = Modifier.height(10.dp))
+                            }
 
-                    // FILTER CHIPS ROW (All, Active, Due, Overdue)
-                    val chipShape = RoundedCornerShape(12.dp)
-                    val chipHeight = 38.dp
-                    val minChipWidth = 84.dp
+                            // FILTER CHIPS ROW (All, Active, Due, Overdue)
+                            val chipShape = RoundedCornerShape(12.dp)
+                            val chipHeight = 38.dp
+                            val minChipWidth = 84.dp
 
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    ) {
-                        item {
-                            FilterChip(
-                                selected = statusFilter == PolicyFilterStatus.ALL && dueFilter == PolicyFilterDue.ALL && modeFilter == PolicyModeFilter.ALL,
-                                onClick = {
-                                    viewModel.setStatusFilter(PolicyFilterStatus.ALL)
-                                    viewModel.setDueFilter(PolicyFilterDue.ALL)
-                                    viewModel.setModeFilter(PolicyModeFilter.ALL)
-                                },
-                                label = {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
-                                        Text("All (${policies.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                },
-                                shape = chipShape,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AccentOrange,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = NeutralSurfaceDark,
-                                    labelColor = Color.White.copy(alpha = 0.85f)
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = statusFilter == PolicyFilterStatus.ALL && dueFilter == PolicyFilterDue.ALL && modeFilter == PolicyModeFilter.ALL,
-                                    borderColor = NeutralBorderDark,
-                                    selectedBorderColor = AccentOrange
-                                ),
-                                modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = statusFilter == PolicyFilterStatus.ACTIVE,
-                                onClick = {
-                                    viewModel.setStatusFilter(PolicyFilterStatus.ACTIVE)
-                                    viewModel.setDueFilter(PolicyFilterDue.ALL)
-                                },
-                                label = {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
-                                        Text("🟢 Active", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                },
-                                shape = chipShape,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = EmeraldGreenSecondary,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = NeutralSurfaceDark,
-                                    labelColor = Color.White.copy(alpha = 0.85f)
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = statusFilter == PolicyFilterStatus.ACTIVE,
-                                    borderColor = NeutralBorderDark,
-                                    selectedBorderColor = EmeraldGreenSecondary
-                                ),
-                                modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = dueFilter == PolicyFilterDue.DUE_TODAY,
-                                onClick = {
-                                    viewModel.setDueFilter(PolicyFilterDue.DUE_TODAY)
-                                    viewModel.setStatusFilter(PolicyFilterStatus.ALL)
-                                },
-                                label = {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
-                                        Text("🟡 Due", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                },
-                                shape = chipShape,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AccentOrange,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = NeutralSurfaceDark,
-                                    labelColor = Color.White.copy(alpha = 0.85f)
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = dueFilter == PolicyFilterDue.DUE_TODAY,
-                                    borderColor = NeutralBorderDark,
-                                    selectedBorderColor = AccentOrange
-                                ),
-                                modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
-                            )
-                        }
-                        item {
-                            FilterChip(
-                                selected = dueFilter == PolicyFilterDue.OVERDUE || statusFilter == PolicyFilterStatus.LAPSED,
-                                onClick = {
-                                    viewModel.setDueFilter(PolicyFilterDue.OVERDUE)
-                                    viewModel.setStatusFilter(PolicyFilterStatus.ALL)
-                                },
-                                label = {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
-                                        Text("🔴 Overdue", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                    }
-                                },
-                                shape = chipShape,
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = ErrorRed,
-                                    selectedLabelColor = Color.White,
-                                    containerColor = NeutralSurfaceDark,
-                                    labelColor = Color.White.copy(alpha = 0.85f)
-                                ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = dueFilter == PolicyFilterDue.OVERDUE || statusFilter == PolicyFilterStatus.LAPSED,
-                                    borderColor = NeutralBorderDark,
-                                    selectedBorderColor = ErrorRed
-                                ),
-                                modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // BODY CONTENT
-            when {
-                isLoading -> {
-                    PolicyListSkeletonLoader()
-                }
-                errorMessage != null -> {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = ErrorRedContainer)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Icon(Icons.Default.Error, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(40.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Error Loading Policies", fontWeight = FontWeight.Bold, color = ErrorRed)
-                            Text(errorMessage!!, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Button(
-                                onClick = {
-                                    errorMessage = null
-                                    viewModel.triggerSync()
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(bottom = 8.dp)
                             ) {
-                                Text("Retry")
+                                item {
+                                    FilterChip(
+                                        selected = statusFilter == PolicyFilterStatus.ALL && dueFilter == PolicyFilterDue.ALL && modeFilter == PolicyModeFilter.ALL,
+                                        onClick = {
+                                            viewModel.setStatusFilter(PolicyFilterStatus.ALL)
+                                            viewModel.setDueFilter(PolicyFilterDue.ALL)
+                                            viewModel.setModeFilter(PolicyModeFilter.ALL)
+                                        },
+                                        label = {
+                                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
+                                                Text("All (${policies.size})", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        },
+                                        shape = chipShape,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = AccentOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = NeutralSurfaceDark,
+                                            labelColor = Color.White.copy(alpha = 0.85f)
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = statusFilter == PolicyFilterStatus.ALL && dueFilter == PolicyFilterDue.ALL && modeFilter == PolicyModeFilter.ALL,
+                                            borderColor = NeutralBorderDark,
+                                            selectedBorderColor = AccentOrange
+                                        ),
+                                        modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
+                                    )
+                                }
+                                item {
+                                    FilterChip(
+                                        selected = statusFilter == PolicyFilterStatus.ACTIVE,
+                                        onClick = {
+                                            viewModel.setStatusFilter(PolicyFilterStatus.ACTIVE)
+                                            viewModel.setDueFilter(PolicyFilterDue.ALL)
+                                        },
+                                        label = {
+                                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
+                                                Text("🟢 Active", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        },
+                                        shape = chipShape,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = EmeraldGreenSecondary,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = NeutralSurfaceDark,
+                                            labelColor = Color.White.copy(alpha = 0.85f)
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = statusFilter == PolicyFilterStatus.ACTIVE,
+                                            borderColor = NeutralBorderDark,
+                                            selectedBorderColor = EmeraldGreenSecondary
+                                        ),
+                                        modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
+                                    )
+                                }
+                                item {
+                                    FilterChip(
+                                        selected = dueFilter == PolicyFilterDue.DUE_TODAY,
+                                        onClick = {
+                                            viewModel.setDueFilter(PolicyFilterDue.DUE_TODAY)
+                                            viewModel.setStatusFilter(PolicyFilterStatus.ALL)
+                                        },
+                                        label = {
+                                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
+                                                Text("🟡 Due", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        },
+                                        shape = chipShape,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = AccentOrange,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = NeutralSurfaceDark,
+                                            labelColor = Color.White.copy(alpha = 0.85f)
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = dueFilter == PolicyFilterDue.DUE_TODAY,
+                                            borderColor = NeutralBorderDark,
+                                            selectedBorderColor = AccentOrange
+                                        ),
+                                        modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
+                                    )
+                                }
+                                item {
+                                    FilterChip(
+                                        selected = dueFilter == PolicyFilterDue.OVERDUE || statusFilter == PolicyFilterStatus.LAPSED,
+                                        onClick = {
+                                            viewModel.setDueFilter(PolicyFilterDue.OVERDUE)
+                                            viewModel.setStatusFilter(PolicyFilterStatus.ALL)
+                                        },
+                                        label = {
+                                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxHeight()) {
+                                                Text("🔴 Overdue", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                        },
+                                        shape = chipShape,
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = ErrorRed,
+                                            selectedLabelColor = Color.White,
+                                            containerColor = NeutralSurfaceDark,
+                                            labelColor = Color.White.copy(alpha = 0.85f)
+                                        ),
+                                        border = FilterChipDefaults.filterChipBorder(
+                                            enabled = true,
+                                            selected = dueFilter == PolicyFilterDue.OVERDUE || statusFilter == PolicyFilterStatus.LAPSED,
+                                            borderColor = NeutralBorderDark,
+                                            selectedBorderColor = ErrorRed
+                                        ),
+                                        modifier = Modifier.height(chipHeight).widthIn(min = minChipWidth)
+                                    )
+                                }
                             }
                         }
                     }
                 }
-                policies.isEmpty() -> {
-                    if (searchQuery.isNotBlank() || statusFilter != PolicyFilterStatus.ALL || dueFilter != PolicyFilterDue.ALL || modeFilter != PolicyModeFilter.ALL) {
-                        NoMatchingRecordsEmptyState(
-                            query = searchQuery,
-                            onResetFilters = { viewModel.clearAllFilters() }
-                        )
-                    } else {
-                        StandardEmptyState(
-                            title = "No Policies Found",
-                            description = "No policy records found in database. Tap '+ Add Policy' to create a new record.",
-                            icon = Icons.Outlined.FolderOff,
-                            actionLabel = "Add First Policy",
-                            onActionClick = onAddPolicy
-                        )
+
+                // BODY CONTENT (LOADING, ERROR, EMPTY OR POLICY CARDS)
+                when {
+                    isLoading -> {
+                        item(key = "loading_state") {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                PolicyListSkeletonLoader()
+                            }
+                        }
                     }
-                }
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 150.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
+                    errorMessage != null -> {
+                        item(key = "error_state") {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = ErrorRedContainer)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Icon(Icons.Default.Error, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(40.dp))
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("Error Loading Policies", fontWeight = FontWeight.Bold, color = ErrorRed)
+                                        Text(errorMessage!!, style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center)
+                                        Spacer(modifier = Modifier.height(12.dp))
+                                        Button(
+                                            onClick = {
+                                                errorMessage = null
+                                                viewModel.triggerSync()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
+                                        ) {
+                                            Text("Retry")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    policies.isEmpty() -> {
+                        item(key = "empty_state") {
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                if (searchQuery.isNotBlank() || statusFilter != PolicyFilterStatus.ALL || dueFilter != PolicyFilterDue.ALL || modeFilter != PolicyModeFilter.ALL) {
+                                    NoMatchingRecordsEmptyState(
+                                        query = searchQuery,
+                                        onResetFilters = { viewModel.clearAllFilters() }
+                                    )
+                                } else {
+                                    StandardEmptyState(
+                                        title = "No Policies Found",
+                                        description = "No policy records found in database. Tap '+ Add Policy' to create a new record.",
+                                        icon = Icons.Outlined.FolderOff,
+                                        actionLabel = "Add First Policy",
+                                        onActionClick = onAddPolicy
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> {
                         items(policies, key = { it.id }) { policy ->
                             val customer = customers.find { it.id == policy.customerId }
                             val policyPayments = payments.filter { it.policyId == policy.id }
@@ -889,58 +898,60 @@ fun PolicyListScreen(
                                 }
                             )
 
-                            SwipeToDismissBox(
-                                state = dismissState,
-                                backgroundContent = {
-                                    val direction = dismissState.dismissDirection
-                                    val color = when (direction) {
-                                        SwipeToDismissBoxValue.StartToEnd -> EmeraldGreenSecondary
-                                        SwipeToDismissBoxValue.EndToStart -> RoyalBluePrimary
-                                        else -> Color.Transparent
-                                    }
-                                    val icon = when (direction) {
-                                        SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Payments
-                                        SwipeToDismissBoxValue.EndToStart -> Icons.Default.Edit
-                                        else -> Icons.Default.Circle
-                                    }
-                                    val text = when (direction) {
-                                        SwipeToDismissBoxValue.StartToEnd -> "Collect Premium"
-                                        SwipeToDismissBoxValue.EndToStart -> "Edit Policy"
-                                        else -> ""
-                                    }
+                            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                                SwipeToDismissBox(
+                                    state = dismissState,
+                                    backgroundContent = {
+                                        val direction = dismissState.dismissDirection
+                                        val color = when (direction) {
+                                            SwipeToDismissBoxValue.StartToEnd -> EmeraldGreenSecondary
+                                            SwipeToDismissBoxValue.EndToStart -> RoyalBluePrimary
+                                            else -> Color.Transparent
+                                        }
+                                        val icon = when (direction) {
+                                            SwipeToDismissBoxValue.StartToEnd -> Icons.Default.Payments
+                                            SwipeToDismissBoxValue.EndToStart -> Icons.Default.Edit
+                                            else -> Icons.Default.Circle
+                                        }
+                                        val text = when (direction) {
+                                            SwipeToDismissBoxValue.StartToEnd -> "Collect Premium"
+                                            SwipeToDismissBoxValue.EndToStart -> "Edit Policy"
+                                            else -> ""
+                                        }
 
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .clip(RoundedCornerShape(20.dp))
-                                            .background(color)
-                                            .padding(horizontal = 20.dp),
-                                        contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
-                                    ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(icon, contentDescription = null, tint = Color.White)
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(text, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(color)
+                                                .padding(horizontal = 20.dp),
+                                            contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(icon, contentDescription = null, tint = Color.White)
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(text, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                            }
                                         }
+                                    },
+                                    content = {
+                                        PolicyCard(
+                                            policy = policy,
+                                            customer = customer,
+                                            policyPayments = policyPayments,
+                                            outstandingBalance = outstanding,
+                                            onClick = { onSelectPolicy(policy) },
+                                            onCollectPremium = { policyForPayment = policy },
+                                            onEdit = { policyToEdit = policy },
+                                            onEditPlanName = { policyForPlanEdit = policy },
+                                            onDelete = { policyToDelete = policy },
+                                            onShare = {
+                                                sharePolicySummaryText(context, policy, customer, policyPayments)
+                                            }
+                                        )
                                     }
-                                },
-                                content = {
-                                    PolicyCard(
-                                        policy = policy,
-                                        customer = customer,
-                                        policyPayments = policyPayments,
-                                        outstandingBalance = outstanding,
-                                        onClick = { onSelectPolicy(policy) },
-                                        onCollectPremium = { policyForPayment = policy },
-                                        onEdit = { policyToEdit = policy },
-                                        onEditPlanName = { policyForPlanEdit = policy },
-                                        onDelete = { policyToDelete = policy },
-                                        onShare = {
-                                            sharePolicySummaryText(context, policy, customer, policyPayments)
-                                        }
-                                    )
-                                }
-                            )
+                                )
+                            }
                         }
                     }
                 }
@@ -1125,8 +1136,7 @@ fun PolicyListScreen(
             }
         )
     }
-        }
-    }
+}
 
 @Composable
 fun PolicyListSkeletonLoader() {

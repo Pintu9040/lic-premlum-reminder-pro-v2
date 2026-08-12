@@ -73,13 +73,26 @@ object PdfReportGenerator {
 
     suspend fun generatePdfReport(context: Context, data: PdfReportData): Result<File> = withContext(Dispatchers.IO) {
         try {
+            val settings = com.example.data.local.AppSettingsManager.getSettings(context, data.agentProfile)
+            val isReceipt = data.reportType == ReportType.PREMIUM_RECEIPT || data.reportType == ReportType.PAYMENT_RECEIPT
+
+            val (pageWidth, pageHeight, margin) = if (isReceipt) {
+                when (settings.selectedReceiptSize) {
+                    "A5" -> Triple(420, 595, 24)
+                    "Thermal 3-inch", "Thermal" -> Triple(226, 420, 10)
+                    else -> Triple(595, 842, 36)
+                }
+            } else {
+                Triple(PAGE_WIDTH, PAGE_HEIGHT, MARGIN)
+            }
+
             val pdfDocument = PdfDocument()
             var pageNum = 1
-            var pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageNum).create()
+            var pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNum).create()
             var page = pdfDocument.startPage(pageInfo)
             var canvas = page.canvas
 
-            var yPos = drawHeader(canvas, data, pageNum)
+            var yPos = drawHeader(canvas, data, pageNum, settings, pageWidth, margin)
 
             when (data.reportType) {
                 ReportType.CUSTOMER_PROFILE -> {
@@ -89,7 +102,7 @@ object PdfReportGenerator {
                     yPos = drawPolicyDetailsContent(canvas, data)
                 }
                 ReportType.PREMIUM_RECEIPT, ReportType.PAYMENT_RECEIPT -> {
-                    yPos = drawReceiptContent(canvas, data)
+                    yPos = drawReceiptContent(canvas, data, settings, pageWidth, pageHeight, margin)
                 }
                 ReportType.DUE_TODAY,
                 ReportType.TOMORROW_DUE,
@@ -107,7 +120,7 @@ object PdfReportGenerator {
                 }
             }
 
-            drawFooter(canvas, data, pageNum)
+            drawFooter(canvas, data, pageNum, pageWidth, pageHeight, margin)
             pdfDocument.finishPage(page)
 
             // Ensure directory exists
@@ -124,7 +137,7 @@ object PdfReportGenerator {
             pdfDocument.close()
             outputStream.close()
 
-            Log.i(TAG, "Successfully generated PDF report: ${pdfFile.absolutePath}")
+            Log.i(TAG, "Successfully generated PDF report (${settings.selectedReceiptSize}): ${pdfFile.absolutePath}")
             Result.success(pdfFile)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to generate PDF report: ${e.localizedMessage}", e)
@@ -138,81 +151,108 @@ object PdfReportGenerator {
         return File(baseDir, "LIC Premium Reminder Pro/Reports")
     }
 
-    private fun drawHeader(canvas: Canvas, data: PdfReportData, pageNum: Int): Float {
+    private fun drawHeader(
+        canvas: Canvas,
+        data: PdfReportData,
+        pageNum: Int,
+        settings: com.example.data.local.AppSettingsData? = null,
+        pageWidth: Int = PAGE_WIDTH,
+        margin: Int = MARGIN
+    ): Float {
+        val isReceipt = data.reportType == ReportType.PREMIUM_RECEIPT || data.reportType == ReportType.PAYMENT_RECEIPT
+
+        if (isReceipt && settings?.isReceiptHeaderEnabled == false) {
+            return margin.toFloat() + 10f
+        }
+
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         // Top Banner Background
         paint.color = COLOR_ROYAL_BLUE
         paint.style = Paint.Style.FILL
-        canvas.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), 110f, paint)
+        canvas.drawRect(0f, 0f, pageWidth.toFloat(), 110f, paint)
 
         // Gold Decorative Strip
         paint.color = COLOR_GOLD
-        canvas.drawRect(0f, 110f, PAGE_WIDTH.toFloat(), 114f, paint)
+        canvas.drawRect(0f, 110f, pageWidth.toFloat(), 114f, paint)
 
         // Header Title
         paint.color = COLOR_WHITE
-        paint.textSize = 18f
+        paint.textSize = if (pageWidth < 300) 12f else 18f
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        canvas.drawText("LIC PREMIUM REMINDER PRO", MARGIN.toFloat(), 35f, paint)
+        val headerTitle = if (isReceipt && settings != null && settings.receiptHeaderTitle.isNotBlank()) {
+            settings.receiptHeaderTitle.uppercase(Locale.getDefault())
+        } else {
+            "LIC PREMIUM REMINDER PRO"
+        }
+        canvas.drawText(headerTitle, margin.toFloat(), 35f, paint)
 
         // Report Title
-        paint.textSize = 13f
+        paint.textSize = if (pageWidth < 300) 10f else 13f
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         paint.color = COLOR_GOLD
-        canvas.drawText(data.reportType.title.uppercase(Locale.getDefault()), MARGIN.toFloat(), 55f, paint)
+        canvas.drawText(data.reportType.title.uppercase(Locale.getDefault()), margin.toFloat(), 55f, paint)
 
-        // Agent Profile Info in Header (Right aligned or formatted)
-        val agent = data.agentProfile
-        val agentName = agent?.agentName ?: "LIC Advisor"
-        val agencyCode = agent?.agencyCode ?: "LIC-089421"
-        val branchInfo = "${agent?.branchName ?: "Branch"} (${agent?.branchCode ?: "08B"})"
-        val contactInfo = "Ph: ${agent?.mobile ?: ""} | ${agent?.email ?: ""}"
+        if (pageWidth >= 400) {
+            // Agent Profile Info in Header (Right aligned)
+            val agent = data.agentProfile
+            val agentName = agent?.agentName ?: settings?.agentName ?: "LIC Advisor"
+            val agencyCode = agent?.agencyCode ?: settings?.agencyCode ?: "LIC-089421"
+            val branchInfo = "${agent?.branchName ?: settings?.branchName ?: "Branch"} (${agent?.branchCode ?: settings?.branchCode ?: "08B"})"
+            val contactInfo = "Ph: ${agent?.mobile ?: settings?.mobileNumber ?: ""}"
 
-        paint.textSize = 9f
-        paint.color = COLOR_WHITE
-        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
-        paint.textAlign = Paint.Align.RIGHT
+            paint.textSize = 9f
+            paint.color = COLOR_WHITE
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            paint.textAlign = Paint.Align.RIGHT
 
-        val rightX = (PAGE_WIDTH - MARGIN).toFloat()
-        canvas.drawText(agentName, rightX, 30f, paint)
-        canvas.drawText("Agency Code: $agencyCode", rightX, 45f, paint)
-        canvas.drawText(branchInfo, rightX, 60f, paint)
-        canvas.drawText(contactInfo, rightX, 75f, paint)
+            val rightX = (pageWidth - margin).toFloat()
+            canvas.drawText(agentName, rightX, 30f, paint)
+            canvas.drawText("Agency Code: $agencyCode", rightX, 45f, paint)
+            canvas.drawText(branchInfo, rightX, 60f, paint)
+            canvas.drawText(contactInfo, rightX, 75f, paint)
 
-        paint.textAlign = Paint.Align.LEFT
+            paint.textAlign = Paint.Align.LEFT
+        }
 
         // Generated Timestamp Line
         val sdf = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
         val generatedText = "Report Generated: ${sdf.format(Date())}"
         paint.textSize = 8f
         paint.color = COLOR_WHITE
-        canvas.drawText(generatedText, MARGIN.toFloat(), 98f, paint)
+        canvas.drawText(generatedText, margin.toFloat(), 98f, paint)
 
         return 130f
     }
 
-    private fun drawFooter(canvas: Canvas, data: PdfReportData, pageNum: Int) {
+    private fun drawFooter(
+        canvas: Canvas,
+        data: PdfReportData,
+        pageNum: Int,
+        pageWidth: Int = PAGE_WIDTH,
+        pageHeight: Int = PAGE_HEIGHT,
+        margin: Int = MARGIN
+    ) {
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        val footerY = (PAGE_HEIGHT - 35).toFloat()
+        val footerY = (pageHeight - 25).toFloat()
 
         // Divider
         paint.color = COLOR_BORDER
         paint.strokeWidth = 1f
         paint.style = Paint.Style.STROKE
-        canvas.drawLine(MARGIN.toFloat(), footerY - 10, (PAGE_WIDTH - MARGIN).toFloat(), footerY - 10, paint)
+        canvas.drawLine(margin.toFloat(), footerY - 10, (pageWidth - margin).toFloat(), footerY - 10, paint)
 
         paint.style = Paint.Style.FILL
         paint.textSize = 8f
         paint.color = COLOR_TEXT_MUTED
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
 
-        canvas.drawText("LIC Premium Reminder Pro — Official Agent Report", MARGIN.toFloat(), footerY, paint)
+        canvas.drawText("LIC Premium Reminder Pro", margin.toFloat(), footerY, paint)
 
         val agentName = data.agentProfile?.agentName ?: "LIC Agent"
         paint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("Authorized Agent Signature: $agentName | Page $pageNum", (PAGE_WIDTH - MARGIN).toFloat(), footerY, paint)
+        canvas.drawText("Page $pageNum", (pageWidth - margin).toFloat(), footerY, paint)
         paint.textAlign = Paint.Align.LEFT
     }
 
@@ -357,14 +397,28 @@ object PdfReportGenerator {
         return y
     }
 
-    private fun drawReceiptContent(canvas: Canvas, data: PdfReportData): Float {
-        var y = 140f
+    private fun drawReceiptContent(
+        canvas: Canvas,
+        data: PdfReportData,
+        settings: com.example.data.local.AppSettingsData? = null,
+        pageWidth: Int = PAGE_WIDTH,
+        pageHeight: Int = PAGE_HEIGHT,
+        margin: Int = MARGIN
+    ): Float {
+        var y = if (settings?.isReceiptHeaderEnabled == false) margin + 10f else 140f
         val payment = data.payment
         val policy = data.policy
         val customer = data.customer
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
 
-        val receiptNo = payment?.receiptNumber ?: "RCP-${System.currentTimeMillis() % 1000000}"
+        // Setting 6: Auto Receipt Number vs Manual
+        val receiptNo = if (settings?.isAutoReceiptNumber != false) {
+            val prefix = settings?.receiptPrefix?.ifBlank { "LIC-" } ?: "LIC-"
+            "${prefix}${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())}-${(payment?.id ?: 101) + 8900}"
+        } else {
+            payment?.receiptNumber.takeIf { !it.isNullOrBlank() } ?: "RCP-MANUAL-001"
+        }
+
         val paidAmount = payment?.paidAmount ?: (policy?.premiumAmount ?: 0.0)
         val lateFee = payment?.lateFee ?: 0.0
         val totalPaid = paidAmount + lateFee
@@ -375,11 +429,13 @@ object PdfReportGenerator {
         val payMode = payment?.paymentMode ?: "UPI / Online"
 
         // Outer Receipt Card
-        val cardWidth = (PAGE_WIDTH - (MARGIN * 2)).toFloat()
-        val cardHeight = 320f
+        val cardWidth = (pageWidth - (margin * 2)).toFloat()
+        val isThermal = pageWidth < 300
+        val cardHeight = if (isThermal) 360f else 340f
+
         paint.color = COLOR_WHITE
         paint.style = Paint.Style.FILL
-        val cardRect = RectF(MARGIN.toFloat(), y, MARGIN + cardWidth, y + cardHeight)
+        val cardRect = RectF(margin.toFloat(), y, margin + cardWidth, y + cardHeight)
         canvas.drawRoundRect(cardRect, 10f, 10f, paint)
 
         // Outer border
@@ -388,43 +444,65 @@ object PdfReportGenerator {
         paint.strokeWidth = 2f
         canvas.drawRoundRect(cardRect, 10f, 10f, paint)
 
-        // Header band of receipt
-        paint.style = Paint.Style.FILL
-        paint.color = COLOR_ROYAL_BLUE
-        canvas.drawRect(MARGIN.toFloat(), y, MARGIN + cardWidth, y + 40f, paint)
+        // Setting 2 & 3: Header Band & Custom Title
+        if (settings?.isReceiptHeaderEnabled != false) {
+            paint.style = Paint.Style.FILL
+            paint.color = COLOR_ROYAL_BLUE
+            canvas.drawRect(margin.toFloat(), y, margin + cardWidth, y + 40f, paint)
 
-        paint.color = COLOR_WHITE
-        paint.textSize = 14f
-        paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        canvas.drawText("OFFICIAL PREMIUM PAYMENT RECEIPT", MARGIN + 16f, y + 25f, paint)
+            paint.color = COLOR_WHITE
+            paint.textSize = if (isThermal) 10f else 13f
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            val customTitle = settings?.receiptHeaderTitle?.takeIf { it.isNotBlank() } ?: "OFFICIAL PREMIUM PAYMENT RECEIPT"
+            canvas.drawText(customTitle, margin + 12f, y + 25f, paint)
 
-        paint.textAlign = Paint.Align.RIGHT
-        canvas.drawText("RECEIPT #: $receiptNo", MARGIN + cardWidth - 16f, y + 25f, paint)
-        paint.textAlign = Paint.Align.LEFT
+            if (!isThermal) {
+                paint.textAlign = Paint.Align.RIGHT
+                canvas.drawText("RCP #: $receiptNo", margin + cardWidth - 12f, y + 25f, paint)
+                paint.textAlign = Paint.Align.LEFT
+            }
+        }
 
-        var lineY = y + 65f
+        var lineY = y + (if (settings?.isReceiptHeaderEnabled != false) 60f else 25f)
         paint.color = COLOR_TEXT_DARK
-        paint.textSize = 10f
+        paint.textSize = if (isThermal) 8.5f else 10f
 
-        val col1 = MARGIN + 20f
-        val col2 = MARGIN + 280f
+        if (isThermal) {
+            paint.color = COLOR_ROYAL_BLUE
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            canvas.drawText("RECEIPT #: $receiptNo", margin + 12f, lineY, paint)
+            lineY += 18f
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            drawDetailPair(canvas, paint, "Customer:", customerName, margin + 12f, lineY)
+            lineY += 18f
+            drawDetailPair(canvas, paint, "Policy No:", policyNo, margin + 12f, lineY)
+            lineY += 18f
+            drawDetailPair(canvas, paint, "Date:", payDate, margin + 12f, lineY)
+            lineY += 18f
+            drawDetailPair(canvas, paint, "Plan:", planName, margin + 12f, lineY)
+            lineY += 22f
+        } else {
+            val col1 = margin + 16f
+            val col2 = margin + (cardWidth / 2f) + 10f
 
-        drawDetailPair(canvas, paint, "Customer Name:", customerName, col1, lineY)
-        drawDetailPair(canvas, paint, "Payment Date:", payDate, col2, lineY)
-        lineY += 22f
+            drawDetailPair(canvas, paint, "Customer Name:", customerName, col1, lineY)
+            drawDetailPair(canvas, paint, "Payment Date:", payDate, col2, lineY)
+            lineY += 22f
 
-        drawDetailPair(canvas, paint, "Policy Number:", policyNo, col1, lineY)
-        drawDetailPair(canvas, paint, "Payment Mode:", payMode, col2, lineY)
-        lineY += 22f
+            drawDetailPair(canvas, paint, "Policy Number:", policyNo, col1, lineY)
+            drawDetailPair(canvas, paint, "Payment Mode:", payMode, col2, lineY)
+            lineY += 22f
 
-        drawDetailPair(canvas, paint, "Plan Name:", planName, col1, lineY)
-        drawDetailPair(canvas, paint, "Next Due Date:", policy?.dueDate ?: "As per schedule", col2, lineY)
-        lineY += 26f
+            drawDetailPair(canvas, paint, "Plan Name:", planName, col1, lineY)
+            drawDetailPair(canvas, paint, "Next Due Date:", policy?.dueDate ?: "As per schedule", col2, lineY)
+            lineY += 26f
+        }
 
         // Table Box for Financial Breakdown
         paint.color = COLOR_ALT_ROW
         paint.style = Paint.Style.FILL
-        val tableRect = RectF(MARGIN + 16f, lineY, MARGIN + cardWidth - 16f, lineY + 110f)
+        val tableHeight = if (isThermal) 80f else 95f
+        val tableRect = RectF(margin + 12f, lineY, margin + cardWidth - 12f, lineY + tableHeight)
         canvas.drawRoundRect(tableRect, 6f, 6f, paint)
 
         paint.color = COLOR_BORDER
@@ -433,27 +511,53 @@ object PdfReportGenerator {
         canvas.drawRoundRect(tableRect, 6f, 6f, paint)
 
         paint.style = Paint.Style.FILL
-        var tableY = lineY + 22f
+        var tableY = lineY + 20f
 
-        drawAmountRow(canvas, paint, "Base Premium Amount", "₹${String.format("%,.2f", paidAmount)}", tableRect.left + 12f, tableRect.right - 12f, tableY, false)
+        drawAmountRow(canvas, paint, "Base Premium", "₹${String.format("%,.2f", paidAmount)}", tableRect.left + 10f, tableRect.right - 10f, tableY, false)
+        tableY += 18f
+        drawAmountRow(canvas, paint, "Late Fee", "₹${String.format("%,.2f", lateFee)}", tableRect.left + 10f, tableRect.right - 10f, tableY, false)
         tableY += 20f
-        drawAmountRow(canvas, paint, "Late Fee / Interest", "₹${String.format("%,.2f", lateFee)}", tableRect.left + 12f, tableRect.right - 12f, tableY, false)
-        tableY += 20f
-        drawAmountRow(canvas, paint, "Outstanding Balance", "₹0.00", tableRect.left + 12f, tableRect.right - 12f, tableY, false)
-        tableY += 24f
 
-        // Total Row Divider
         paint.color = COLOR_BORDER
         paint.strokeWidth = 1f
-        canvas.drawLine(tableRect.left + 10f, tableY - 12f, tableRect.right - 10f, tableY - 12f, paint)
+        canvas.drawLine(tableRect.left + 8f, tableY - 10f, tableRect.right - 8f, tableY - 10f, paint)
 
-        drawAmountRow(canvas, paint, "TOTAL PAID AMOUNT", "₹${String.format("%,.2f", totalPaid)}", tableRect.left + 12f, tableRect.right - 12f, tableY, true)
+        drawAmountRow(canvas, paint, "TOTAL PAID", "₹${String.format("%,.2f", totalPaid)}", tableRect.left + 10f, tableRect.right - 10f, tableY, true)
 
-        lineY = y + cardHeight - 30f
+        lineY = tableRect.bottom + 18f
+
+        // Status Line
         paint.color = COLOR_SUCCESS
-        paint.textSize = 11f
+        paint.textSize = if (isThermal) 9f else 11f
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        canvas.drawText("Status: PAYMENT RECEIVED & CONFIRMED", MARGIN + 20f, lineY, paint)
+        canvas.drawText("Status: PAYMENT CONFIRMED", margin + 16f, lineY, paint)
+        lineY += 22f
+
+        // Setting 4: Agent Digital Signature
+        if (settings?.isAgentSignatureOnReceipt != false) {
+            paint.color = COLOR_ROYAL_BLUE
+            paint.textSize = 8.5f
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            val agentLabel = "Digitally Signed by ${settings?.agentName ?: data.agentProfile?.agentName ?: "Authorized Agent"}"
+            canvas.drawText("✓ $agentLabel", margin + 16f, lineY, paint)
+            lineY += 14f
+            paint.color = COLOR_TEXT_MUTED
+            paint.textSize = 7.5f
+            paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+            canvas.drawText("Agency Code: ${settings?.agencyCode ?: data.agentProfile?.agencyCode ?: "LIC-089421"} • System Verified", margin + 16f, lineY, paint)
+        }
+
+        // Setting 5: QR Verification Code
+        if (settings?.isQrCodeOnReceipt != false) {
+            val qrContent = "VERIFIED RECEIPT: $receiptNo | POLICY $policyNo | AMT ₹$totalPaid"
+            val qrBitmap = com.example.util.QrCodeGenerator.generateQrBitmap(qrContent, size = 90)
+            if (qrBitmap != null) {
+                val qrSize = if (isThermal) 50f else 60f
+                val qrX = margin + cardWidth - qrSize - 16f
+                val qrY = cardRect.bottom - qrSize - 16f
+                canvas.drawBitmap(qrBitmap, null, RectF(qrX, qrY, qrX + qrSize, qrY + qrSize), null)
+            }
+        }
 
         return y + cardHeight + 20f
     }

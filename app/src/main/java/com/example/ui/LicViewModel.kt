@@ -498,6 +498,21 @@ class LicViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptyList()
     )
 
+    private val _appSettings = MutableStateFlow(com.example.data.local.AppSettingsManager.getSettings(application))
+    val appSettings: StateFlow<com.example.data.local.AppSettingsData> = _appSettings.asStateFlow()
+
+    fun updateSettings(newSettings: com.example.data.local.AppSettingsData) {
+        _appSettings.value = newSettings
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val db = com.example.data.local.AppDatabase.getDatabase(getApplication())
+            com.example.data.local.AppSettingsManager.saveSettings(getApplication(), newSettings, db, syncManager)
+        }
+    }
+
+    fun refreshSettings(profile: AgentProfileEntity? = null) {
+        _appSettings.value = com.example.data.local.AppSettingsManager.getSettings(getApplication(), profile ?: agentProfile.value)
+    }
+
     fun setSearchQuery(query: String) {
         _searchQuery.value = query
     }

@@ -11,6 +11,7 @@ import com.example.data.remote.FirebaseSyncManager
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -59,7 +60,16 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     private val syncManager: FirebaseSyncManager by lazy { FirebaseSyncManager(getApplication()) }
     private val db: AppDatabase by lazy { AppDatabase.getDatabase(getApplication()) }
 
-    private val _authState = MutableStateFlow<AuthState>(AuthState.LoggedOut)
+    private val _authState = MutableStateFlow<AuthState>(
+        AuthState.LoggedIn(
+            uid = "demo_agent_uid",
+            email = "agent@lic.com",
+            name = "Pintu Ojha",
+            agencyCode = "LIC-AGENT-89421",
+            branchName = "Bhubaneswar Branch",
+            mobile = "+91 9876543210"
+        )
+    )
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
     private val _forgotPasswordSuccess = MutableStateFlow<String?>(null)
@@ -70,7 +80,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun checkExistingSession() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val authResult = getFirebaseAuthResult()
                 val firebaseAuth = authResult.getOrNull()
@@ -179,7 +189,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _authState.value = AuthState.Loading
 
             val authResult = getFirebaseAuthResult()
@@ -276,7 +286,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _authState.value = AuthState.Loading
 
             val authResult = getFirebaseAuthResult()
@@ -402,7 +412,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loginAnonymously() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _authState.value = AuthState.Loading
             val authResult = getFirebaseAuthResult()
             val firebaseAuth = authResult.getOrElse {

@@ -24,20 +24,33 @@ object SecurePreferences {
         keyStore.load(null)
 
         if (!keyStore.containsAlias(KEY_ALIAS)) {
-            val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-            val spec = KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-            keyGenerator.init(spec)
-            keyGenerator.generateKey()
+            generateKey()
         }
 
-        return (keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
+        val entry = keyStore.getEntry(KEY_ALIAS, null)
+        if (entry is KeyStore.SecretKeyEntry) {
+            return entry.secretKey
+        }
+
+        // Fallback: delete corrupt alias and regenerate
+        keyStore.deleteEntry(KEY_ALIAS)
+        generateKey()
+        val newEntry = keyStore.getEntry(KEY_ALIAS, null) as KeyStore.SecretKeyEntry
+        return newEntry.secretKey
+    }
+
+    private fun generateKey() {
+        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        val spec = KeyGenParameterSpec.Builder(
+            KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        keyGenerator.init(spec)
+        keyGenerator.generateKey()
     }
 
     private fun getSharedPreferences(context: Context): SharedPreferences {

@@ -44,12 +44,7 @@ class LicRepository(
             if (!uid.isNullOrBlank()) {
                 uid
             } else {
-                val profile = kotlinx.coroutines.runBlocking { agentDao.getAgentProfileSync() }
-                if (profile != null && profile.email.isNotBlank()) {
-                    "agent_" + profile.email.trim().hashCode()
-                } else {
-                    "default_agent"
-                }
+                "default_agent"
             }
         } catch (e: Throwable) {
             "default_agent"
@@ -403,7 +398,9 @@ class LicRepository(
 
     private suspend fun recalculatePolicyAndDueDate(policy: PolicyEntity, providedNextDueDate: String?) {
         val uid = syncManager.getOrEnsureUid()
-        val allPaymentsForPolicy = paymentDao.getAllPaymentsSync().filter { it.policyId == policy.id }
+        val allPaymentsForPolicy = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            paymentDao.getAllPaymentsSync()
+        }.filter { it.policyId == policy.id }
         val installment = policy.premiumAmount
 
         if (installment <= 0) return
@@ -525,52 +522,53 @@ class LicRepository(
     }
 
     // --- Agent Profile Firestore Flow & Operations ---
-    val agentProfile: Flow<AgentProfileEntity?> = callbackFlow {
-        val firestore = getFirestore()
-        if (firestore == null) {
-            val job = scope.launch {
-                agentDao.getAgentProfile().collect { trySend(it) }
+    val agentProfile: Flow<AgentProfileEntity?> = channelFlow {
+        val roomJob = scope.launch {
+            agentDao.getAgentProfile().collect { profile ->
+                send(profile)
             }
-            awaitClose { job.cancel() }
-            return@callbackFlow
         }
 
+        val firestore = getFirestore()
         var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
-        val job = scope.launch {
-            val uid = syncManager.getOrEnsureUid()
-            Log.d("FirestoreSync", "Listening for Agent Profile in Firestore at path: agents/$uid")
-            listenerRegistration = firestore.collection("agents").document(uid)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null || snapshot == null || !snapshot.exists()) {
-                        scope.launch {
-                            val local = agentDao.getAgentProfileSync()
-                            trySend(local)
+        if (firestore != null) {
+            scope.launch {
+                try {
+                    val uid = syncManager.getOrEnsureUid()
+                    Log.d("FirestoreSync", "Listening for Agent Profile in Firestore at path: agents/$uid")
+                    listenerRegistration = firestore.collection("agents").document(uid)
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null || snapshot == null || !snapshot.exists()) {
+                                return@addSnapshotListener
+                            }
+                            val profile = AgentProfileEntity(
+                                id = 1,
+                                agentName = snapshot.getString("agentName") ?: "Agent",
+                                agencyCode = snapshot.getString("agencyCode") ?: "",
+                                branchName = snapshot.getString("branchName") ?: "",
+                                licenseNumber = snapshot.getString("licenseNumber") ?: "",
+                                email = snapshot.getString("email") ?: (try { FirebaseAuth.getInstance().currentUser?.email } catch (_: Throwable) { null } ?: ""),
+                                mobile = snapshot.getString("mobile") ?: "",
+                                photoUri = snapshot.getString("photoUri") ?: "",
+                                themeMode = snapshot.getString("themeMode") ?: "System",
+                                pinCode = snapshot.getString("pinCode") ?: "",
+                                autoLogoutMinutes = (snapshot.getLong("autoLogoutMinutes") ?: 15L).toInt(),
+                                isAutoSyncEnabled = true,
+                                lastSyncedTime = "Just now"
+                            )
+                            scope.launch {
+                                send(profile)
+                                agentDao.saveAgentProfile(profile)
+                            }
                         }
-                        return@addSnapshotListener
-                    }
-                    val profile = AgentProfileEntity(
-                        id = 1,
-                        agentName = snapshot.getString("agentName") ?: "Agent",
-                        agencyCode = snapshot.getString("agencyCode") ?: "",
-                        branchName = snapshot.getString("branchName") ?: "",
-                        licenseNumber = snapshot.getString("licenseNumber") ?: "",
-                        email = snapshot.getString("email") ?: (try { FirebaseAuth.getInstance().currentUser?.email } catch (_: Throwable) { null } ?: ""),
-                        mobile = snapshot.getString("mobile") ?: "",
-                        photoUri = snapshot.getString("photoUri") ?: "",
-                        themeMode = snapshot.getString("themeMode") ?: "System",
-                        pinCode = snapshot.getString("pinCode") ?: "",
-                        autoLogoutMinutes = (snapshot.getLong("autoLogoutMinutes") ?: 15L).toInt(),
-                        isAutoSyncEnabled = true,
-                        lastSyncedTime = "Just now"
-                    )
-                    trySend(profile)
-                    scope.launch {
-                        agentDao.saveAgentProfile(profile)
-                    }
+                } catch (e: Exception) {
+                    Log.w("FirestoreSync", "Error attaching agent profile listener: ${e.localizedMessage}")
                 }
+            }
         }
+
         awaitClose {
-            job.cancel()
+            roomJob.cancel()
             listenerRegistration?.remove()
         }
     }

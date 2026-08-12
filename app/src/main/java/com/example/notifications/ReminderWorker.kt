@@ -46,10 +46,14 @@ class ReminderWorker(
             var notificationsSentCount = 0
 
             for (policy in policies) {
-                // Rule 1: Skip Paid, Cancelled, Lapsed, or Inactive policies
+                // Rule 1: Skip Paid, Cancelled, or Inactive policies
                 val statusUpper = policy.status.uppercase(Locale.getDefault())
-                if (statusUpper == "PAID" || statusUpper == "CANCELLED" || statusUpper == "LAPSED" || statusUpper == "INACTIVE") {
+                if (statusUpper == "PAID" || statusUpper == "CANCELLED" || statusUpper == "INACTIVE") {
                     Log.d(TAG, "Skipping Policy ${policy.policyNumber}: Status is '$statusUpper'")
+                    continue
+                }
+                if (statusUpper == "LAPSED" && !NotificationEngine.isOverdueReminderEnabled(appContext)) {
+                    Log.d(TAG, "Skipping Policy ${policy.policyNumber}: Status is LAPSED and Overdue/Lapsed reminders are OFF")
                     continue
                 }
 
@@ -85,18 +89,19 @@ class ReminderWorker(
                             message = "Premium for Policy #${policy.policyNumber} (${policy.customerName}) is due tomorrow."
                         }
                     }
-                    diffInDays == 7 -> {
+                    diffInDays in 2..7 -> {
                         if (NotificationEngine.isWeeklyReminderEnabled(appContext)) {
                             notificationType = "DUE_IN_7_DAYS"
-                            title = "📅 Upcoming LIC Premium Due (7 Days)"
-                            message = "Policy #${policy.policyNumber} (${policy.customerName}) due in 7 days."
+                            title = "📅 Upcoming LIC Premium Due ($diffInDays Days)"
+                            message = "Policy #${policy.policyNumber} (${policy.customerName}) due in $diffInDays days."
                         }
                     }
-                    diffInDays < 0 -> {
+                    diffInDays < 0 || statusUpper == "LAPSED" -> {
                         if (NotificationEngine.isOverdueReminderEnabled(appContext)) {
                             notificationType = "OVERDUE"
-                            title = "⚠️ OVERDUE LIC Premium Alert"
-                            message = "Policy #${policy.policyNumber} (${policy.customerName}) is OVERDUE by ${Math.abs(diffInDays)} days!"
+                            title = "⚠️ OVERDUE / Lapsed LIC Premium Alert"
+                            val overdueDays = if (diffInDays < 0) Math.abs(diffInDays) else 1
+                            message = "Policy #${policy.policyNumber} (${policy.customerName}) is OVERDUE by $overdueDays days!"
                         }
                     }
                 }

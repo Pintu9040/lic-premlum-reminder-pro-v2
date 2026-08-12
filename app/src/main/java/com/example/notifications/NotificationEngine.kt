@@ -63,12 +63,31 @@ object NotificationEngine {
         return getPrefs(context).getBoolean("vibration_enabled", true)
     }
 
+    fun getSelectedReminderTime(context: Context): String {
+        return getPrefs(context).getString("reminder_time", "09:00 AM") ?: "09:00 AM"
+    }
+
+    fun parseReminderTime(timeStr: String): Pair<Int, Int> {
+        val clean = timeStr.trim().uppercase()
+        val isPm = clean.contains("PM")
+        val parts = clean.replace("AM", "").replace("PM", "").trim().split(":")
+        var hour = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 9
+        val minute = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+        if (isPm && hour < 12) hour += 12
+        if (!isPm && hour == 12) hour = 0
+        return Pair(hour, minute)
+    }
+
     fun createNotificationChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val importance = NotificationManager.IMPORTANCE_HIGH
+            val isVib = isVibrationEnabled(context)
             val channel = NotificationChannel(CHANNEL_ID, CHANNEL_NAME, importance).apply {
                 description = CHANNEL_DESC
-                enableVibration(isVibrationEnabled(context))
+                enableVibration(isVib)
+                if (isVib) {
+                    vibrationPattern = longArrayOf(0L, 250L, 250L, 250L)
+                }
                 if (isSoundEnabled(context)) {
                     val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                     setSound(
@@ -83,16 +102,41 @@ object NotificationEngine {
             val notificationManager =
                 context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
-            Log.i(TAG, "Notification channel initialized successfully: $CHANNEL_ID")
+            Log.i(TAG, "Notification channel initialized successfully: $CHANNEL_ID (vibration=$isVib)")
         }
     }
 
     fun scheduleBackgroundWorkers(context: Context) {
         try {
             val workManager = WorkManager.getInstance(context)
+
+            // Master switch check: if OFF, cancel all scheduled reminder workers
+            if (!isNotificationsEnabled(context)) {
+                workManager.cancelUniqueWork(WORK_NAME_ONEOFF)
+                workManager.cancelUniqueWork(WORK_NAME_PERIODIC)
+                Log.i(TAG, "Automated Reminders OFF: All background workers cancelled.")
+                return
+            }
+
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.NOT_REQUIRED)
                 .build()
+
+            // Calculate initial delay for selected daily schedule time
+            val selectedTime = getSelectedReminderTime(context)
+            val (targetHour, targetMinute) = parseReminderTime(selectedTime)
+
+            val now = java.util.Calendar.getInstance()
+            val target = java.util.Calendar.getInstance().apply {
+                set(java.util.Calendar.HOUR_OF_DAY, targetHour)
+                set(java.util.Calendar.MINUTE, targetMinute)
+                set(java.util.Calendar.SECOND, 0)
+                set(java.util.Calendar.MILLISECOND, 0)
+                if (before(now)) {
+                    add(java.util.Calendar.DAY_OF_YEAR, 1)
+                }
+            }
+            val initialDelayMs = (target.timeInMillis - now.timeInMillis).coerceAtLeast(0L)
 
             // 1. One-time immediate sync & notification check
             val oneTimeRequest = OneTimeWorkRequestBuilder<ReminderWorker>()
@@ -105,18 +149,19 @@ object NotificationEngine {
                 oneTimeRequest
             )
 
-            // 2. Periodic background check every 6 hours
-            val periodicRequest = PeriodicWorkRequestBuilder<ReminderWorker>(6, TimeUnit.HOURS)
+            // 2. Daily periodic background check at scheduled time every 24 hours
+            val periodicRequest = PeriodicWorkRequestBuilder<ReminderWorker>(24, TimeUnit.HOURS)
                 .setConstraints(constraints)
+                .setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
                 .build()
 
             workManager.enqueueUniquePeriodicWork(
                 WORK_NAME_PERIODIC,
-                ExistingPeriodicWorkPolicy.UPDATE,
+                ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE,
                 periodicRequest
             )
 
-            Log.i(TAG, "WorkManager periodic & immediate workers successfully scheduled.")
+            Log.i(TAG, "WorkManager scheduled for daily time '$selectedTime' with initial delay ${initialDelayMs / 1000}s.")
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to schedule WorkManager workers: ${e.localizedMessage}", e)
         }
@@ -195,6 +240,7 @@ object NotificationEngine {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val isVib = isVibrationEnabled(context)
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle(title)
@@ -203,12 +249,15 @@ object NotificationEngine {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(openPendingIntent)
             .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .addAction(android.R.drawable.ic_menu_call, "Call", callPendingIntent)
             .addAction(android.R.drawable.ic_menu_save, "Mark Paid", markPaidPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPendingIntent)
 
-        if (!isVibrationEnabled(context)) {
+        if (isVib) {
+            builder.setDefaults(NotificationCompat.DEFAULT_ALL)
+            builder.setVibrate(longArrayOf(0L, 250L, 250L, 250L))
+        } else {
+            builder.setDefaults(NotificationCompat.DEFAULT_SOUND)
             builder.setVibrate(longArrayOf(0L))
         }
 
@@ -222,5 +271,75 @@ object NotificationEngine {
         } catch (e: Throwable) {
             Log.e(TAG, "Error posting notification: ${e.localizedMessage}", e)
         }
+    }
+
+    fun runNotificationEngineDiagnostic(context: Context): Map<String, Boolean> {
+        val results = mutableMapOf<String, Boolean>()
+        val prefs = getPrefs(context)
+
+        // 1. Master Switch Test
+        val origMaster = isNotificationsEnabled(context)
+        prefs.edit().putBoolean("notifications_enabled", false).apply()
+        val masterOffCheck = !isNotificationsEnabled(context)
+        prefs.edit().putBoolean("notifications_enabled", true).apply()
+        val masterOnCheck = isNotificationsEnabled(context)
+        prefs.edit().putBoolean("notifications_enabled", origMaster).apply()
+        results["Automated Dues Reminders (Master Switch)"] = masterOffCheck && masterOnCheck
+
+        // 2. Due Today Alerts Test
+        val origToday = isTodayReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_today_enabled", false).apply()
+        val todayOffCheck = !isTodayReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_today_enabled", true).apply()
+        val todayOnCheck = isTodayReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_today_enabled", origToday).apply()
+        results["Due Today Alerts"] = todayOffCheck && todayOnCheck
+
+        // 3. Tomorrow Dues Warning Test
+        val origTomorrow = isTomorrowReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_tomorrow_enabled", false).apply()
+        val tomorrowOffCheck = !isTomorrowReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_tomorrow_enabled", true).apply()
+        val tomorrowOnCheck = isTomorrowReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_tomorrow_enabled", origTomorrow).apply()
+        results["Tomorrow Dues Warning"] = tomorrowOffCheck && tomorrowOnCheck
+
+        // 4. Overdue/Lapsed Follow-up Test
+        val origOverdue = isOverdueReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_overdue_enabled", false).apply()
+        val overdueOffCheck = !isOverdueReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_overdue_enabled", true).apply()
+        val overdueOnCheck = isOverdueReminderEnabled(context)
+        prefs.edit().putBoolean("reminder_overdue_enabled", origOverdue).apply()
+        results["Overdue/Lapsed Follow-up"] = overdueOffCheck && overdueOnCheck
+
+        // 5. WhatsApp Automation Integration Test
+        val origWa = com.example.whatsapp.WhatsAppAutomation.isWhatsAppRemindersEnabled(context)
+        com.example.whatsapp.WhatsAppAutomation.setWhatsAppRemindersEnabled(context, false)
+        val waOffCheck = !com.example.whatsapp.WhatsAppAutomation.isWhatsAppRemindersEnabled(context)
+        com.example.whatsapp.WhatsAppAutomation.setWhatsAppRemindersEnabled(context, true)
+        val waOnCheck = com.example.whatsapp.WhatsAppAutomation.isWhatsAppRemindersEnabled(context)
+        com.example.whatsapp.WhatsAppAutomation.setWhatsAppRemindersEnabled(context, origWa)
+        results["WhatsApp Automation Integration"] = waOffCheck && waOnCheck
+
+        // 6. Daily Schedule Time Test
+        val origTime = getSelectedReminderTime(context)
+        prefs.edit().putString("reminder_time", "06:00 PM").apply()
+        val parsedTime = parseReminderTime("06:00 PM")
+        val timeCheck = getSelectedReminderTime(context) == "06:00 PM" && parsedTime == Pair(18, 0)
+        prefs.edit().putString("reminder_time", origTime).apply()
+        results["Daily Schedule Time"] = timeCheck
+
+        // 7. Vibration Alert Test
+        val origVib = isVibrationEnabled(context)
+        prefs.edit().putBoolean("vibration_enabled", false).apply()
+        val vibOffCheck = !isVibrationEnabled(context)
+        prefs.edit().putBoolean("vibration_enabled", true).apply()
+        val vibOnCheck = isVibrationEnabled(context)
+        prefs.edit().putBoolean("vibration_enabled", origVib).apply()
+        results["Vibration Alert"] = vibOffCheck && vibOnCheck
+
+        Log.i(TAG, "NotificationEngine Diagnostic Results: $results")
+        return results
     }
 }

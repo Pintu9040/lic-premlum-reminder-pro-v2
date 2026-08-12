@@ -139,7 +139,7 @@ object QrCodeGenerator {
             isAntiAlias = true
             textAlign = Paint.Align.CENTER
         }
-        canvas.drawText("Amount Due: ₹$cleanAmount", (width / 2).toFloat(), 690f, amountPaint)
+        canvas.drawText("Payment Amount: ₹$cleanAmount", (width / 2).toFloat(), 690f, amountPaint)
 
         // Info Text
         val infoTextPaint = Paint().apply {

@@ -8,6 +8,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -64,7 +65,8 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun LICReminderProTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = false, // Keep consistent LIC branding
+    dynamicColor: Boolean = false,
+    fontSize: String = "Medium",
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {
@@ -76,9 +78,13 @@ fun LICReminderProTheme(
         else -> LightColorScheme
     }
 
+    val scaledTypography = remember(fontSize) {
+        getScaledTypography(fontSize)
+    }
+
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = scaledTypography,
         content = content
     )
 }

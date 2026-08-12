@@ -89,7 +89,9 @@ class FirebaseSyncManager(private val context: Context) {
 
         return try {
             val db = AppDatabase.getDatabase(context)
-            val profile = db.agentDao().getAgentProfileSync()
+            val profile = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                db.agentDao().getAgentProfileSync()
+            }
             if (profile != null && profile.email.isNotBlank()) {
                 val emailUid = "agent_" + kotlin.math.abs(profile.email.trim().lowercase().hashCode())
                 Log.d("FirestoreSync", "Using local profile email UID: $emailUid")
@@ -419,8 +421,8 @@ class FirebaseSyncManager(private val context: Context) {
 
         try {
             val dbInstance = firestore ?: throw IllegalStateException("FirebaseFirestore instance is null")
-            val policies = db.policyDao().getAllPoliciesSync()
-            val customers = db.customerDao().getAllCustomersSync()
+            val policies = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.policyDao().getAllPoliciesSync() }
+            val customers = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.customerDao().getAllCustomersSync() }
 
             val remindersSubCol = dbInstance.collection("agents").document(uid).collection("reminders")
             val remindersTopCol = dbInstance.collection("reminders")
@@ -663,7 +665,7 @@ class FirebaseSyncManager(private val context: Context) {
             _syncStatus.value = SyncStatus.Synced(syncTime)
 
             // Update agent's lastSyncedTime in local profile
-            val currentProfile = db.agentDao().getAgentProfileSync()
+            val currentProfile = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.agentDao().getAgentProfileSync() }
             if (currentProfile != null) {
                 db.agentDao().saveAgentProfile(currentProfile.copy(lastSyncedTime = syncTime))
             }
@@ -698,28 +700,28 @@ class FirebaseSyncManager(private val context: Context) {
             _syncStatus.value = SyncStatus.Syncing
 
             // Profile
-            val profile = db.agentDao().getAgentProfileSync()
+            val profile = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.agentDao().getAgentProfileSync() }
             if (profile != null) {
                 backupAgentProfile(uid, profile)
             }
 
             // Customers
-            val customers = db.customerDao().getAllCustomersSync()
+            val customers = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.customerDao().getAllCustomersSync() }
             Log.d(tag, "Bulk uploading ${customers.size} customers to Firestore...")
             customers.forEach { backupCustomer(uid, it) }
 
             // Policies
-            val policies = db.policyDao().getAllPoliciesSync()
+            val policies = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.policyDao().getAllPoliciesSync() }
             Log.d(tag, "Bulk uploading ${policies.size} policies to Firestore...")
             policies.forEach { backupPolicy(uid, it) }
 
             // Payments
-            val payments = db.paymentDao().getAllPaymentsSync()
+            val payments = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.paymentDao().getAllPaymentsSync() }
             Log.d(tag, "Bulk uploading ${payments.size} payments to Firestore...")
             payments.forEach { backupPayment(uid, it) }
 
             // Documents
-            val documents = db.documentDao().getAllDocumentsSync()
+            val documents = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.documentDao().getAllDocumentsSync() }
             Log.d(tag, "Bulk uploading ${documents.size} documents to Firestore...")
             documents.forEach { backupDocument(uid, it) }
 
@@ -747,9 +749,9 @@ class FirebaseSyncManager(private val context: Context) {
         val tag = "FirestoreSync"
         try {
             val dbInstance = firestore ?: return
-            val customersCount = db.customerDao().getAllCustomersSync().size
-            val policiesCount = db.policyDao().getAllPoliciesSync().size
-            val payments = db.paymentDao().getAllPaymentsSync()
+            val customersCount = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.customerDao().getAllCustomersSync().size }
+            val policiesCount = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.policyDao().getAllPoliciesSync().size }
+            val payments = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { db.paymentDao().getAllPaymentsSync() }
             val totalCollected = payments.sumOf { it.paidAmount }
 
             val reportData = mapOf(

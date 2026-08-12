@@ -26,6 +26,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
@@ -81,6 +82,7 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     val agentProfileState by (viewModel?.agentProfile?.collectAsState() ?: remember { mutableStateOf(null) })
+    val appSettingsState by (viewModel?.appSettings?.collectAsState() ?: remember { mutableStateOf(null) })
 
     // --- Profile State ---
     var agentName by remember { mutableStateOf("Pintu Ojha") }
@@ -193,8 +195,8 @@ fun SettingsScreen(
     var storageUsedMb by remember { mutableFloatStateOf(34.5f) }
 
     // Load initial persistent settings
-    LaunchedEffect(Unit) {
-        val loaded = AppSettingsManager.getSettings(context, agentProfileState)
+    LaunchedEffect(appSettingsState) {
+        val loaded = appSettingsState ?: AppSettingsManager.getSettings(context, agentProfileState)
         isDarkMode = loaded.isDarkMode
         isSystemTheme = loaded.isSystemTheme
         selectedLanguage = loaded.selectedLanguage
@@ -220,9 +222,6 @@ fun SettingsScreen(
         accountHolderNameState = loaded.accountHolderName
         upiVpaIdState = loaded.upiVpaId
 
-        accountHolderNameState = loaded.accountHolderName
-        upiVpaIdState = loaded.upiVpaId
-
         isAutoBackupEnabled = loaded.isAutoBackupEnabled
         isCloudSyncEnabled = loaded.isCloudSyncEnabled
         lastBackupText = loaded.lastBackupText
@@ -240,7 +239,27 @@ fun SettingsScreen(
     }
 
     // Auto-save setting changes helper
-    fun persistSettings() {
+    fun persistSettings(
+        premiumReminder: Boolean = isPremiumReminder,
+        dueToday: Boolean = isDueTodayReminder,
+        tomorrow: Boolean = isTomorrowReminder,
+        upcoming: Boolean = isUpcomingReminder,
+        overdue: Boolean = isOverdueReminder,
+        whatsApp: Boolean = isWhatsAppReminder,
+        reminderTime: String = selectedReminderTime,
+        notificationSound: String = selectedNotificationSound,
+        vibration: Boolean = isVibrationEnabled,
+        darkMode: Boolean = isDarkMode,
+        systemTheme: Boolean = isSystemTheme,
+        language: String = selectedLanguage,
+        fontSize: String = selectedFontSize,
+        receiptSize: String = selectedReceiptSize,
+        receiptHeader: Boolean = isReceiptHeaderEnabled,
+        headerTitle: String = receiptHeaderTitle,
+        agentSignature: Boolean = isAgentSignatureEnabled,
+        qrCode: Boolean = isQrCodeEnabled,
+        autoReceipt: Boolean = isAutoReceiptNumber
+    ) {
         coroutineScope.launch(Dispatchers.IO) {
             val currentSettings = AppSettingsData(
                 agentName = agentName,
@@ -251,25 +270,25 @@ fun SettingsScreen(
                 emailAddress = emailAddress,
                 officeAddress = officeAddress,
                 photoUri = photoUri,
-                isDarkMode = isDarkMode,
-                isSystemTheme = isSystemTheme,
-                selectedLanguage = selectedLanguage,
-                selectedFontSize = selectedFontSize,
-                isPremiumReminder = isPremiumReminder,
-                isDueTodayReminder = isDueTodayReminder,
-                isTomorrowReminder = isTomorrowReminder,
-                isUpcomingReminder = isUpcomingReminder,
-                isOverdueReminder = isOverdueReminder,
-                isWhatsAppReminder = isWhatsAppReminder,
-                selectedReminderTime = selectedReminderTime,
-                selectedNotificationSound = selectedNotificationSound,
-                isVibrationEnabled = isVibrationEnabled,
-                selectedReceiptSize = selectedReceiptSize,
-                isReceiptHeaderEnabled = isReceiptHeaderEnabled,
-                receiptHeaderTitle = receiptHeaderTitle,
-                isAgentSignatureOnReceipt = isAgentSignatureEnabled,
-                isQrCodeOnReceipt = isQrCodeEnabled,
-                isAutoReceiptNumber = isAutoReceiptNumber,
+                isDarkMode = darkMode,
+                isSystemTheme = systemTheme,
+                selectedLanguage = language,
+                selectedFontSize = fontSize,
+                isPremiumReminder = premiumReminder,
+                isDueTodayReminder = dueToday,
+                isTomorrowReminder = tomorrow,
+                isUpcomingReminder = upcoming,
+                isOverdueReminder = overdue,
+                isWhatsAppReminder = whatsApp,
+                selectedReminderTime = reminderTime,
+                selectedNotificationSound = notificationSound,
+                isVibrationEnabled = vibration,
+                selectedReceiptSize = receiptSize,
+                isReceiptHeaderEnabled = receiptHeader,
+                receiptHeaderTitle = headerTitle,
+                isAgentSignatureOnReceipt = agentSignature,
+                isQrCodeOnReceipt = qrCode,
+                isAutoReceiptNumber = autoReceipt,
                 accountHolderName = accountHolderNameState,
                 upiVpaId = upiVpaIdState,
                 isAutoBackupEnabled = isAutoBackupEnabled,
@@ -283,7 +302,11 @@ fun SettingsScreen(
                 selectedAutoLockTime = selectedAutoLockTime
             )
             val db = AppDatabase.getDatabase(context)
-            AppSettingsManager.saveSettings(context, currentSettings, db, null)
+            if (viewModel != null) {
+                viewModel.updateSettings(currentSettings)
+            } else {
+                AppSettingsManager.saveSettings(context, currentSettings, db, null)
+            }
             viewModel?.triggerSync()
         }
     }
@@ -307,16 +330,16 @@ fun SettingsScreen(
                 title = {
                     Column {
                         Text(
-                            text = "Settings",
+                            text = "Profile & Settings",
                             color = TextWhite,
                             fontWeight = FontWeight.Bold,
                             fontSize = 19.sp
                         )
                         Text(
-                            text = "Manage your LIC Premium Reminder Pro preferences.",
+                            text = "Manage your profile, reminders, PDF receipts & app preferences.",
                             color = TextMuted,
-                            fontSize = 11.5.sp,
-                            maxLines = 1,
+                            fontSize = 12.sp,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -460,42 +483,42 @@ fun SettingsScreen(
                 isPremiumReminder = isPremiumReminder,
                 onPremiumReminderChange = {
                     isPremiumReminder = it
-                    persistSettings()
+                    persistSettings(premiumReminder = it)
                 },
                 isDueToday = isDueTodayReminder,
                 onDueTodayChange = {
                     isDueTodayReminder = it
-                    persistSettings()
+                    persistSettings(dueToday = it)
                 },
                 isTomorrow = isTomorrowReminder,
                 onTomorrowChange = {
                     isTomorrowReminder = it
-                    persistSettings()
+                    persistSettings(tomorrow = it)
                 },
                 isOverdue = isOverdueReminder,
                 onOverdueChange = {
                     isOverdueReminder = it
-                    persistSettings()
+                    persistSettings(overdue = it)
                 },
                 isWhatsApp = isWhatsAppReminder,
                 onWhatsAppChange = {
                     isWhatsAppReminder = it
-                    persistSettings()
+                    persistSettings(whatsApp = it)
                 },
                 selectedTime = selectedReminderTime,
                 onTimeChange = {
                     selectedReminderTime = it
-                    persistSettings()
+                    persistSettings(reminderTime = it)
                 },
                 selectedSound = selectedNotificationSound,
                 onSoundChange = {
                     selectedNotificationSound = it
-                    persistSettings()
+                    persistSettings(notificationSound = it)
                 },
                 isVibration = isVibrationEnabled,
                 onVibrationChange = {
                     isVibrationEnabled = it
-                    persistSettings()
+                    persistSettings(vibration = it)
                 }
             )
 
@@ -504,32 +527,32 @@ fun SettingsScreen(
                 selectedSize = selectedReceiptSize,
                 onSizeChange = {
                     selectedReceiptSize = it
-                    persistSettings()
+                    persistSettings(receiptSize = it)
                 },
                 isHeader = isReceiptHeaderEnabled,
                 onHeaderChange = {
                     isReceiptHeaderEnabled = it
-                    persistSettings()
+                    persistSettings(receiptHeader = it)
                 },
                 headerTitle = receiptHeaderTitle,
                 onHeaderTitleChange = {
                     receiptHeaderTitle = it
-                    persistSettings()
+                    persistSettings(headerTitle = it)
                 },
                 isSignature = isAgentSignatureEnabled,
                 onSignatureChange = {
                     isAgentSignatureEnabled = it
-                    persistSettings()
+                    persistSettings(agentSignature = it)
                 },
                 isQrCode = isQrCodeEnabled,
                 onQrCodeChange = {
                     isQrCodeEnabled = it
-                    persistSettings()
+                    persistSettings(qrCode = it)
                 },
                 isAutoReceipt = isAutoReceiptNumber,
                 onAutoReceiptChange = {
                     isAutoReceiptNumber = it
-                    persistSettings()
+                    persistSettings(autoReceipt = it)
                 }
             )
 
@@ -726,7 +749,7 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(80.dp))
         }
     }
 
@@ -744,17 +767,32 @@ fun SettingsScreen(
 
     // Edit Profile Dialog
     if (showEditProfileDialog) {
+        fun extract10DigitMobile(fullMobile: String): String {
+            val digitsOnly = fullMobile.filter { it.isDigit() }
+            return if (digitsOnly.length >= 10) digitsOnly.takeLast(10) else digitsOnly
+        }
+
+        fun isValidEmailFormat(email: String): Boolean {
+            val trimmed = email.trim()
+            if (trimmed.isBlank()) return false
+            val emailRegex = "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$".toRegex()
+            return emailRegex.matches(trimmed)
+        }
+
         var tempName by remember { mutableStateOf(agentName) }
         var tempCode by remember { mutableStateOf(agentCode) }
         var tempBranchCode by remember { mutableStateOf(branchCode) }
         var tempBranchName by remember { mutableStateOf(branchName) }
-        var tempMobile by remember { mutableStateOf(mobileNumber) }
+        var tempMobileDigits by remember { mutableStateOf(extract10DigitMobile(mobileNumber)) }
         var tempEmail by remember { mutableStateOf(emailAddress) }
         var tempOffice by remember { mutableStateOf(officeAddress) }
         var showSearchBranchDialog by remember { mutableStateOf(false) }
 
         val foundBranch = remember(tempBranchCode) { LicBranchMaster.findBranchByCode(tempBranchCode) }
         val isBranchCodeInvalid = tempBranchCode.isNotBlank() && foundBranch == null
+
+        val isMobileValid = tempMobileDigits.length == 10 && tempMobileDigits.firstOrNull() in listOf('6', '7', '8', '9')
+        val isEmailValid = isValidEmailFormat(tempEmail)
 
         LaunchedEffect(tempBranchCode) {
             val matched = LicBranchMaster.findBranchByCode(tempBranchCode)
@@ -790,8 +828,8 @@ fun SettingsScreen(
                                 agencyCode = tempCode,
                                 branchCode = tempBranchCode,
                                 branchName = tempBranchName,
-                                mobile = tempMobile,
-                                email = tempEmail,
+                                mobile = "+91 $tempMobileDigits",
+                                email = tempEmail.trim(),
                                 officeAddress = tempOffice,
                                 photoUri = ""
                             )
@@ -920,50 +958,157 @@ fun SettingsScreen(
                             .testTag("edit_branch_name_field")
                     )
 
-                    OutlinedTextField(
-                        value = tempMobile,
-                        onValueChange = { tempMobile = it },
-                        label = { Text("Mobile Number", color = TextMuted) },
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    // Mobile Number with fixed +91 prefix and single line 10-digit input
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "Mobile Number",
+                            color = if (tempMobileDigits.isNotEmpty() && !isMobileValid) Color(0xFFEF4444) else TextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF0F172A),
+                                border = BorderStroke(1.dp, CardBorder),
+                                modifier = Modifier.height(56.dp)
+                            ) {
+                                Box(
+                                    contentAlignment = Alignment.Center,
+                                    modifier = Modifier.padding(horizontal = 14.dp)
+                                ) {
+                                    Text(
+                                        text = "+91",
+                                        color = TextWhite,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp
+                                    )
+                                }
+                            }
 
-                    OutlinedTextField(
-                        value = tempEmail,
-                        onValueChange = { tempEmail = it },
-                        label = { Text("Email Address", color = TextMuted) },
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                            OutlinedTextField(
+                                value = tempMobileDigits,
+                                onValueChange = { input ->
+                                    val clean = input.filter { it.isDigit() }.take(10)
+                                    tempMobileDigits = clean
+                                },
+                                placeholder = { Text("9040608289", color = TextMuted.copy(alpha = 0.5f)) },
+                                singleLine = true,
+                                maxLines = 1,
+                                isError = tempMobileDigits.isNotEmpty() && !isMobileValid,
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextWhite,
+                                    unfocusedTextColor = TextWhite,
+                                    focusedBorderColor = RoyalBlueLight,
+                                    unfocusedBorderColor = CardBorder,
+                                    errorBorderColor = Color(0xFFEF4444)
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("edit_mobile_number_field")
+                            )
+                        }
 
+                        if (tempMobileDigits.isNotEmpty() && !isMobileValid) {
+                            Text(
+                                text = if (tempMobileDigits.firstOrNull() !in listOf('6', '7', '8', '9'))
+                                    "Mobile number must start with 6, 7, 8, or 9"
+                                else
+                                    "Mobile number must be exactly 10 digits",
+                                color = Color(0xFFEF4444),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Email Address with validation
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = tempEmail,
+                            onValueChange = { input ->
+                                tempEmail = input.replace(" ", "")
+                            },
+                            label = { Text("Email Address", color = if (tempEmail.isNotEmpty() && !isEmailValid) Color(0xFFEF4444) else TextMuted) },
+                            placeholder = { Text("agent@gmail.com", color = TextMuted.copy(alpha = 0.5f)) },
+                            singleLine = true,
+                            maxLines = 1,
+                            isError = tempEmail.isNotEmpty() && !isEmailValid,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextWhite,
+                                unfocusedTextColor = TextWhite,
+                                focusedBorderColor = RoyalBlueLight,
+                                unfocusedBorderColor = CardBorder,
+                                errorBorderColor = Color(0xFFEF4444)
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("edit_email_address_field")
+                        )
+                        if (tempEmail.isNotEmpty() && !isEmailValid) {
+                            Text(
+                                text = "Please enter a valid email address (e.g. padmalochanojha12@gmail.com)",
+                                color = Color(0xFFEF4444),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Agent Address (Multiline)
                     OutlinedTextField(
                         value = tempOffice,
                         onValueChange = { tempOffice = it },
-                        label = { Text("Office Address", color = TextMuted) },
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = TextWhite, unfocusedTextColor = TextWhite),
-                        modifier = Modifier.fillMaxWidth().testTag("edit_office_address_field")
+                        label = { Text("Agent Address", color = TextMuted) },
+                        placeholder = { Text("Enter Agent Address", color = TextMuted.copy(alpha = 0.5f)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextWhite,
+                            unfocusedTextColor = TextWhite,
+                            focusedBorderColor = RoyalBlueLight,
+                            unfocusedBorderColor = CardBorder
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_agent_address_field")
                     )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        if (isBranchCodeInvalid) return@Button
+                        if (isBranchCodeInvalid || !isMobileValid || !isEmailValid) return@Button
+
+                        val fullMobileToSave = "+91 $tempMobileDigits"
+                        val trimmedEmail = tempEmail.trim()
 
                         agentName = tempName
                         agentCode = tempCode
                         branchCode = tempBranchCode
                         branchName = tempBranchName
-                        mobileNumber = tempMobile
-                        emailAddress = tempEmail
+                        mobileNumber = fullMobileToSave
+                        emailAddress = trimmedEmail
                         officeAddress = tempOffice
                         val updated = (agentProfileState ?: com.example.data.local.AgentProfileEntity()).copy(
                             agentName = tempName,
                             agencyCode = tempCode,
                             branchCode = tempBranchCode,
                             branchName = tempBranchName,
-                            mobile = tempMobile,
-                            email = tempEmail,
+                            mobile = fullMobileToSave,
+                            email = trimmedEmail,
                             officeAddress = tempOffice,
                             photoUri = photoUri
                         )
@@ -974,7 +1119,7 @@ fun SettingsScreen(
                             snackbarHostState.showSnackbar("Agent profile updated & synced successfully!")
                         }
                     },
-                    enabled = !isBranchCodeInvalid,
+                    enabled = !isBranchCodeInvalid && isMobileValid && isEmailValid,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = RoyalBlueLight,
                         disabledContainerColor = RoyalBlueLight.copy(alpha = 0.4f),
@@ -1652,7 +1797,7 @@ fun ProfileCardSection(
                 ProfileInfoRow(label = "Branch", value = "$branchCode • $branchName")
                 ProfileInfoRow(label = "Mobile", value = mobileNumber)
                 ProfileInfoRow(label = "Email", value = emailAddress)
-                ProfileInfoRow(label = "Office Address", value = officeAddress)
+                ProfileInfoRow(label = "Agent Address", value = officeAddress)
             }
         }
     }
@@ -1731,13 +1876,15 @@ fun AppPreferencesSection(
                     Text("Application Language", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
                     ) {
                         listOf("English", "Hindi", "Odia", "Marathi").forEach { lang ->
                             FilterChip(
                                 selected = selectedLanguage == lang,
                                 onClick = { onLanguageChange(lang) },
-                                label = { Text(lang, fontSize = 12.sp) },
+                                label = { Text(lang, fontSize = 12.sp, maxLines = 1) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = RoyalBlueLight,
                                     selectedLabelColor = TextWhite,
@@ -1751,12 +1898,17 @@ fun AppPreferencesSection(
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Display Font Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
                         listOf("Small", "Medium", "Large").forEach { size ->
                             FilterChip(
                                 selected = selectedFontSize == size,
                                 onClick = { onFontSizeChange(size) },
-                                label = { Text(size, fontSize = 12.sp) },
+                                label = { Text(size, fontSize = 12.sp, maxLines = 1) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = RoyalBlueLight,
                                     selectedLabelColor = TextWhite,
@@ -1828,12 +1980,17 @@ fun NotificationSettingsSection(
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Daily Schedule Time", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
                         listOf("08:00 AM", "09:00 AM", "10:00 AM", "06:00 PM").forEach { time ->
                             FilterChip(
                                 selected = selectedTime == time,
                                 onClick = { onTimeChange(time) },
-                                label = { Text(time, fontSize = 12.sp) },
+                                label = { Text(time, fontSize = 12.sp, maxLines = 1) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = RoyalBlueLight,
                                     selectedLabelColor = TextWhite,
@@ -1887,12 +2044,17 @@ fun ReceiptSettingsSection(
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Receipt Size", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                ) {
                     listOf("A5", "A4", "Thermal 3-inch").forEach { size ->
                         FilterChip(
                             selected = selectedSize == size,
                             onClick = { onSizeChange(size) },
-                            label = { Text(size, fontSize = 12.sp) },
+                            label = { Text(size, fontSize = 12.sp, maxLines = 1) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = RoyalBlueLight,
                                 selectedLabelColor = TextWhite,
@@ -2077,12 +2239,17 @@ fun SecuritySettingsSection(
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Auto Lock Delay", color = TextWhite, fontWeight = FontWeight.SemiBold, fontSize = 13.5.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                    ) {
                         listOf("Immediate", "1 Min", "5 Min", "15 Min").forEach { time ->
                             FilterChip(
                                 selected = selectedAutoLockTime == time,
                                 onClick = { onAutoLockTimeChange(time) },
-                                label = { Text(time, fontSize = 12.sp) },
+                                label = { Text(time, fontSize = 12.sp, maxLines = 1) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = RoyalBlueLight,
                                     selectedLabelColor = TextWhite,

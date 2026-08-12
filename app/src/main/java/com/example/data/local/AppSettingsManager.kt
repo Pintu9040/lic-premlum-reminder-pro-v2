@@ -70,13 +70,13 @@ data class AppSettingsData(
     val isAutoReceiptNumber: Boolean = true,
 
     // Payment Settings
-    val accountHolderName: String = "Pintu Ojha",
-    val upiVpaId: String = "licagent@upi",
+    val accountHolderName: String = "GEETANJALI SUTAR",
+    val upiVpaId: String = "895412036@lic",
 
     // Security Settings
-    val isAppLockEnabled: Boolean = true,
-    val isPinLockEnabled: Boolean = true,
-    val pinCode: String = "1234",
+    val isAppLockEnabled: Boolean = false,
+    val isPinLockEnabled: Boolean = false,
+    val pinCode: String = "",
     val isFingerprintEnabled: Boolean = false,
     val isFaceUnlockEnabled: Boolean = false,
     val selectedAutoLockTime: String = "5 Min"
@@ -108,7 +108,7 @@ object AppSettingsManager {
             officeAddress = profileAddress,
             photoUri = profilePhoto,
 
-            isDarkMode = prefs.getBoolean("is_dark_mode", true),
+            isDarkMode = prefs.getBoolean("is_dark_mode", false),
             isSystemTheme = prefs.getBoolean("is_system_theme", false),
             selectedLanguage = prefs.getString("selected_language", "English") ?: "English",
             selectedFontSize = prefs.getString("selected_font_size", "Medium") ?: "Medium",
@@ -143,15 +143,17 @@ object AppSettingsManager {
             isQrCodeOnReceipt = prefs.getBoolean("receipt_qrcode_enabled", true),
             isAutoReceiptNumber = prefs.getBoolean("receipt_auto_num_enabled", true),
 
-            accountHolderName = prefs.getString("payment_account_holder", profileName) ?: profileName,
-            upiVpaId = prefs.getString("payment_upi_vpa", "licagent@upi") ?: "licagent@upi",
+            accountHolderName = prefs.getString("payment_account_holder", "GEETANJALI SUTAR") ?: "GEETANJALI SUTAR",
+            upiVpaId = prefs.getString("payment_upi_vpa", "895412036@lic") ?: "895412036@lic",
 
-            isAppLockEnabled = prefs.getBoolean("app_lock_enabled", true),
-            isPinLockEnabled = prefs.getBoolean("pin_lock_enabled", true),
+            isAppLockEnabled = prefs.getBoolean("app_lock_enabled", false),
+            isPinLockEnabled = prefs.getBoolean("pin_lock_enabled", false),
             pinCode = com.example.util.SecurePreferences.getSecureToken(context, "encrypted_pin_code").ifBlank {
-                val legacy = prefs.getString("pin_code", "1234") ?: "1234"
-                com.example.util.SecurePreferences.saveSecureToken(context, "encrypted_pin_code", legacy)
-                prefs.edit().remove("pin_code").apply()
+                val legacy = prefs.getString("pin_code", "") ?: ""
+                if (legacy.isNotBlank()) {
+                    com.example.util.SecurePreferences.saveSecureToken(context, "encrypted_pin_code", legacy)
+                    prefs.edit().remove("pin_code").apply()
+                }
                 legacy
             },
             isFingerprintEnabled = com.example.util.SecurityUtils.isBiometricEnabled(context),
@@ -183,8 +185,15 @@ object AppSettingsManager {
                 putString("selected_language", settings.selectedLanguage)
                 putString("selected_font_size", settings.selectedFontSize)
 
+                putBoolean("is_premium_reminder", settings.isPremiumReminder)
+                putBoolean("is_due_today_reminder", settings.isDueTodayReminder)
+                putBoolean("is_tomorrow_reminder", settings.isTomorrowReminder)
+                putBoolean("is_upcoming_reminder", settings.isUpcomingReminder)
+                putBoolean("is_overdue_reminder", settings.isOverdueReminder)
+                putBoolean("is_whatsapp_reminder", settings.isWhatsAppReminder)
                 putString("reminder_time", settings.selectedReminderTime)
                 putString("notification_sound", settings.selectedNotificationSound)
+                putBoolean("is_vibration_enabled", settings.isVibrationEnabled)
 
                 putString("whatsapp_agent_signature", settings.agentSignature)
 
@@ -225,6 +234,7 @@ object AppSettingsManager {
                 putBoolean("reminder_tomorrow_enabled", settings.isTomorrowReminder)
                 putBoolean("reminder_weekly_enabled", settings.isUpcomingReminder)
                 putBoolean("reminder_overdue_enabled", settings.isOverdueReminder)
+                putString("reminder_time", settings.selectedReminderTime)
                 putBoolean("vibration_enabled", settings.isVibrationEnabled)
                 putBoolean("sound_enabled", settings.selectedNotificationSound != "Silent")
                 apply()
@@ -340,5 +350,17 @@ object AppSettingsManager {
             Log.w(TAG, "Database optimization notice: ${e.localizedMessage}")
             false
         }
+    }
+
+    fun savePaymentAccountHolder(context: Context, accountHolderName: String) {
+        if (accountHolderName.isBlank()) return
+        val prefs = context.getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+        prefs.edit().putString("payment_account_holder", accountHolderName.trim()).apply()
+    }
+
+    fun savePaymentUpiVpa(context: Context, upiVpaId: String) {
+        if (upiVpaId.isBlank()) return
+        val prefs = context.getSharedPreferences(PREFS_SETTINGS, Context.MODE_PRIVATE)
+        prefs.edit().putString("payment_upi_vpa", upiVpaId.trim()).apply()
     }
 }

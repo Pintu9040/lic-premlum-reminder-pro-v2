@@ -72,6 +72,11 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
+            window.setBackgroundDrawableResource(android.R.color.white)
+        } catch (e: Throwable) {
+            android.util.Log.w("MainActivity", "Window background error: ${e.localizedMessage}")
+        }
+        try {
             if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
                 com.google.firebase.FirebaseApp.initializeApp(this)
             }
@@ -81,15 +86,39 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
         enableEdgeToEdge()
 
         setContent {
+            val context = androidx.compose.ui.platform.LocalContext.current
             val agentProfile by licViewModel.agentProfile.collectAsState()
-            val isDark = when (agentProfile?.themeMode) {
-                "Light" -> false
-                "Dark" -> true
-                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            val appSettings by licViewModel.appSettings.collectAsState()
+
+            val isSystemDark = androidx.compose.foundation.isSystemInDarkTheme()
+            val isDark = if (appSettings.isSystemTheme) {
+                isSystemDark
+            } else {
+                appSettings.isDarkMode
+            }
+
+            val currentLanguage = appSettings.selectedLanguage
+            val currentFontSize = appSettings.selectedFontSize
+
+            LaunchedEffect(currentLanguage) {
+                com.example.util.AppLocalization.updateLocale(context, currentLanguage)
+            }
+
+            val baseDensity = androidx.compose.ui.platform.LocalDensity.current
+            val fontScaleFactor = when (currentFontSize.lowercase()) {
+                "small" -> 0.85f
+                "large" -> 1.18f
+                else -> 1.0f
+            }
+            val customDensity = remember(baseDensity, fontScaleFactor) {
+                androidx.compose.ui.unit.Density(
+                    density = baseDensity.density,
+                    fontScale = baseDensity.fontScale * fontScaleFactor
+                )
             }
 
             var isPinUnlocked by remember { mutableStateOf(false) }
-            val rawPinCode = agentProfile?.pinCode ?: ""
+            val rawPinCode = appSettings.pinCode.ifBlank { agentProfile?.pinCode ?: "" }
 
             fun isPinValid(pin: String?): Boolean {
                 if (pin.isNullOrBlank()) return false
@@ -97,7 +126,7 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
                 return trimmed.length == 4 && trimmed.all { it.isDigit() }
             }
 
-            val hasValidPin = isPinValid(rawPinCode)
+            val hasValidPin = appSettings.isAppLockEnabled && appSettings.isPinLockEnabled && isPinValid(rawPinCode)
 
             LaunchedEffect(rawPinCode) {
                 if (rawPinCode.isNotBlank() && !hasValidPin) {
@@ -107,61 +136,72 @@ class MainActivity : androidx.fragment.app.FragmentActivity() {
                 }
             }
 
-            LICReminderProTheme(darkTheme = isDark) {
-                val authState by authViewModel.authState.collectAsState()
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides customDensity,
+                com.example.util.LocalAppLanguage provides currentLanguage
+            ) {
+                LICReminderProTheme(
+                    darkTheme = isDark,
+                    fontSize = currentFontSize
+                ) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                    val authState by authViewModel.authState.collectAsState()
 
-                if (hasValidPin && !isPinUnlocked && authState is AuthState.LoggedIn) {
-                    PinLockScreen(
-                        correctPin = rawPinCode.trim(),
-                        agentProfile = agentProfile,
-                        onUnlocked = { isPinUnlocked = true },
-                        onResetPin = { newPinHash ->
-                            agentProfile?.let { prof ->
-                                licViewModel.saveAgentProfile(prof.copy(pinCode = newPinHash))
+                    if (hasValidPin && !isPinUnlocked && authState is AuthState.LoggedIn) {
+                        PinLockScreen(
+                            correctPin = rawPinCode.trim(),
+                            agentProfile = agentProfile,
+                            onUnlocked = { isPinUnlocked = true },
+                            onResetPin = { newPinHash ->
+                                agentProfile?.let { prof ->
+                                    licViewModel.saveAgentProfile(prof.copy(pinCode = newPinHash))
+                                }
+                                isPinUnlocked = true
                             }
-                            isPinUnlocked = true
-                        }
-                    )
-                } else {
-                    when (authState) {
-                        is AuthState.LoggedOut -> {
-                            var authScreen by remember { mutableStateOf("login") }
-                            when (authScreen) {
-                                "login" -> LoginScreen(
-                                    authViewModel = authViewModel,
-                                    onNavigateToRegister = { authScreen = "register" },
-                                    onNavigateToForgotPassword = { authScreen = "forgot" }
-                                )
-                                "register" -> RegisterScreen(
-                                    authViewModel = authViewModel,
-                                    onNavigateToLogin = { authScreen = "login" }
-                                )
-                                "forgot" -> ForgotPasswordScreen(
-                                    authViewModel = authViewModel,
-                                    onNavigateToLogin = { authScreen = "login" }
+                        )
+                    } else {
+                        when (authState) {
+                            is AuthState.LoggedOut -> {
+                                var authScreen by remember { mutableStateOf("login") }
+                                when (authScreen) {
+                                    "login" -> LoginScreen(
+                                        authViewModel = authViewModel,
+                                        onNavigateToRegister = { authScreen = "register" },
+                                        onNavigateToForgotPassword = { authScreen = "forgot" }
+                                    )
+                                    "register" -> RegisterScreen(
+                                        authViewModel = authViewModel,
+                                        onNavigateToLogin = { authScreen = "login" }
+                                    )
+                                    "forgot" -> ForgotPasswordScreen(
+                                        authViewModel = authViewModel,
+                                        onNavigateToLogin = { authScreen = "login" }
+                                    )
+                                }
+                            }
+                            is AuthState.Loading -> {
+                                Box(
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(color = RoyalBluePrimary)
+                                }
+                            }
+                            is AuthState.LoggedIn -> {
+                                MainAppContent(
+                                    licViewModel = licViewModel,
+                                    authViewModel = authViewModel
                                 )
                             }
-                        }
-                        is AuthState.Loading -> {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = androidx.compose.ui.Alignment.Center
-                            ) {
-                                CircularProgressIndicator(color = RoyalBluePrimary)
+                            is AuthState.Error -> {
+                                MainAppContent(
+                                    licViewModel = licViewModel,
+                                    authViewModel = authViewModel
+                                )
                             }
-                        }
-                        is AuthState.LoggedIn -> {
-                            MainAppContent(
-                                licViewModel = licViewModel,
-                                authViewModel = authViewModel
-                            )
-                        }
-                        is AuthState.Error -> {
-                            LoginScreen(
-                                authViewModel = authViewModel,
-                                onNavigateToRegister = { },
-                                onNavigateToForgotPassword = { }
-                            )
                         }
                     }
                 }
@@ -253,13 +293,16 @@ fun MainAppContent(
     Scaffold(
         topBar = {
             if (currentDestination != ScreenDestination.Dashboard &&
+                currentDestination != ScreenDestination.Policies &&
                 currentDestination !is ScreenDestination.CustomerDetail &&
                 currentDestination !is ScreenDestination.CustomerPaymentHistory &&
                 currentDestination !is ScreenDestination.PolicyDetail &&
                 currentDestination != ScreenDestination.Payments &&
                 currentDestination != ScreenDestination.RecordPayment &&
                 currentDestination != ScreenDestination.AddPolicy &&
-                currentDestination != ScreenDestination.Reports
+                currentDestination != ScreenDestination.Reports &&
+                currentDestination != ScreenDestination.Documents &&
+                currentDestination != ScreenDestination.Settings
             ) {
                 TopAppBar(
                     title = {
@@ -660,6 +703,7 @@ fun MainAppContent(
             }
         )
     }
+}
 }
 
 @Composable

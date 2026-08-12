@@ -24,8 +24,9 @@ class LicApplication : Application() {
         try {
             NotificationEngine.createNotificationChannel(this)
             NotificationEngine.scheduleBackgroundWorkers(this)
+            NotificationEngine.runNotificationEngineDiagnostic(this)
             com.example.data.remote.CloudSyncWorker.schedulePeriodicSync(this)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e("LicApplication", "Failed to initialize NotificationEngine or CloudSyncWorker: ${e.localizedMessage}", e)
         }
     }
@@ -101,20 +102,30 @@ class LicApplication : Application() {
 
     private fun initAppCheck() {
         try {
-            val firebaseAppCheck = FirebaseAppCheck.getInstance()
-            if (BuildConfig.DEBUG) {
+            val availability = com.google.android.gms.common.GoogleApiAvailability.getInstance()
+                .isGooglePlayServicesAvailable(this)
+            if (availability != com.google.android.gms.common.ConnectionResult.SUCCESS) {
+                Log.w("LicApplication", "Google Play Services unavailable or non-standard (code: $availability). Skipping AppCheck provider initialization.")
+                return
+            }
+
+            val firebaseAppCheck = try { FirebaseAppCheck.getInstance() } catch (e: Throwable) { null } ?: return
+            firebaseAppCheck.setTokenAutoRefreshEnabled(false)
+            try {
                 firebaseAppCheck.installAppCheckProviderFactory(
                     DebugAppCheckProviderFactory.getInstance()
                 )
                 Log.i("LicApplication", "Firebase AppCheck installed DebugAppCheckProviderFactory")
-            } else {
-                firebaseAppCheck.installAppCheckProviderFactory(
-                    PlayIntegrityAppCheckProviderFactory.getInstance()
-                )
-                Log.i("LicApplication", "Firebase AppCheck installed PlayIntegrityAppCheckProviderFactory")
+            } catch (e: Throwable) {
+                Log.w("LicApplication", "Firebase AppCheck Provider factory skipped: ${e.localizedMessage}")
             }
         } catch (e: Throwable) {
             Log.w("LicApplication", "Firebase AppCheck initialization skipped or failed: ${e.localizedMessage}")
         }
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        Log.d("LicApplication", "onTrimMemory level: $level")
     }
 }
